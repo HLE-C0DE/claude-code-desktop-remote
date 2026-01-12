@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#2563eb">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>ClaudeCode_Remote</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/i18n.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="app-header">
+            <button class="btn-icon" id="back-btn" onclick="goBack()" style="display: none;">
+                <span id="back-btn-text">← Retour</span>
+            </button>
+            <h1 class="app-title">📱 ClaudeCode_Remote</h1>
+            <div class="header-status-group">
+                <div class="status">
+                    <span class="status-indicator" id="status"></span>
+                    <span id="status-text">...</span>
+                </div>
+                <div class="cdp-connection-monitor" id="cdp-connection-container">
+                    <span class="cdp-icon">🔌</span>
+                    <span class="cdp-label" id="cdp-label">Port 9222:</span>
+                    <span class="cdp-counter" id="cdp-connection-counter">0</span>
+                    <span class="cdp-details" id="cdp-connection-details"></span>
+                </div>
+                <button class="btn-icon server-logs-btn" id="server-logs-btn" onclick="toggleServerLogs()">
+                    <span id="logs-btn-text">📊 Logs</span>
+                </button>
+                <div class="language-selector" onclick="toggleLanguage()" title="Change language / Changer de langue">
+                    <span class="lang-icon" id="lang-flag">🇬🇧</span>
+                    <span id="lang-name">English</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main content -->
+        <main class="app-main" id="app-content">
+            <!-- Le contenu sera injecté dynamiquement par JavaScript -->
+        </main>
+    </div>
+
+    <!-- Tasklist Popup -->
+    <div class="tasklist-popup" id="tasklist-popup">
+        <div class="tasklist-bubble" id="tasklist-bubble">
+            <span class="tasklist-bubble-icon">📋</span>
+            <span class="tasklist-bubble-badge" id="tasklist-badge">0</span>
+        </div>
+        <div class="tasklist-panel" id="tasklist-panel">
+            <div class="tasklist-panel-header">
+                <span class="tasklist-panel-title" id="tasklist-title">📋 Tâches</span>
+                <button class="tasklist-close-btn" id="tasklist-close-btn">×</button>
+            </div>
+            <div class="tasklist-panel-content" id="tasklist-panel-content">
+                <!-- Le contenu des tâches sera injecté ici -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Server Logs Popup -->
+    <div class="serverlogs-popup" id="serverlogs-popup">
+        <div class="serverlogs-bubble" id="serverlogs-bubble">
+            <span class="serverlogs-bubble-icon">🖥️</span>
+            <span class="serverlogs-bubble-badge" id="serverlogs-badge">0</span>
+        </div>
+        <div class="serverlogs-panel" id="serverlogs-panel">
+            <div class="serverlogs-panel-header">
+                <div>
+                    <span class="serverlogs-panel-title" id="serverlogs-title">🖥️ Server Logs</span>
+                    <span class="serverlogs-count" id="serverlogs-count"></span>
+                </div>
+                <div class="serverlogs-controls">
+                    <select id="serverlogs-level-filter" class="serverlogs-select">
+                        <option value="all" id="opt-all">All levels</option>
+                        <option value="log" id="opt-log">Log</option>
+                        <option value="info" id="opt-info">Info</option>
+                        <option value="warn" id="opt-warn">Warn</option>
+                        <option value="error" id="opt-error">Error</option>
+                    </select>
+                    <input type="text" id="serverlogs-search" class="serverlogs-search">
+                    <button class="serverlogs-btn" id="serverlogs-clear-btn">🗑️</button>
+                    <button class="serverlogs-btn" id="serverlogs-refresh-btn">🔄</button>
+                    <button class="serverlogs-close-btn" id="serverlogs-close-btn">×</button>
+                </div>
+            </div>
+            <div class="serverlogs-panel-content" id="serverlogs-panel-content">
+                <div class="serverlogs-loading" id="serverlogs-loading">Loading logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app-i18n.js"></script>
+    <script src="/app.js"></script>
+</body>
+</html>
