@@ -64,8 +64,6 @@ claude-remote/
 │   └── styles.css
 ├── docs/
 │   ├── API.md
-│   ├── CLOUDFLARE_TUNNEL.md
-│   └── TROUBLESHOOTING.md
 ├── scripts/
 └── launch.bat
 ```
@@ -144,8 +142,6 @@ claude-remote/
 │   └── styles.css
 ├── docs/
 │   ├── API.md
-│   ├── CLOUDFLARE_TUNNEL.md
-│   └── TROUBLESHOOTING.md
 ├── scripts/
 └── launch.bat
 ```
