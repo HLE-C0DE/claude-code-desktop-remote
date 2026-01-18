@@ -20,7 +20,7 @@ A lightweight web interface to control **Claude Desktop** from your phone, table
 - **Bilingual** — Auto-detects browser language (English/French)
 - **Simple setup** — One command to start
 
-<img width="1351" height="1166" alt="cc-remote" src="https://github.com/user-attachments/assets/5f498fc4-e5bd-4026-b582-83dc6e67496f" />
+<img width="1353" height="1473" alt="Capture d’écran 2026-01-18 140004" src="https://github.com/user-attachments/assets/d57fc23b-8b5b-4d2e-b480-cb2930e64d4e" />
 
 ### Requirements
 
@@ -98,7 +98,7 @@ Une interface web légère pour contrôler **Claude Desktop** installé sur votr
 - **Bilingue** — Détection automatique de la langue (Français/Anglais)
 - **Simple** — Une commande pour démarrer
 
-<img width="1351" height="1166" alt="cc-remote" src="https://github.com/user-attachments/assets/9d81a2c2-4e47-440f-9c5d-46b689520ddf" />
+<img width="1344" height="1479" alt="Capture d’écran 2026-01-18 140123" src="https://github.com/user-attachments/assets/51575226-4194-47d8-b28c-86ebf449b7c2" />
 
 ### Prérequis
 
