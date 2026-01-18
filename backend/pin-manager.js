@@ -21,7 +21,7 @@ class PinManager extends EventEmitter {
     // Configuration
     this.maxAttemptsPerIP = options.maxAttemptsPerIP || 3;
     this.globalAlertThreshold = options.globalAlertThreshold || 5;
-    this.sessionTimeout = options.sessionTimeout || 30 * 60 * 1000; // SÉCURITÉ: 30 minutes (réduit de 24h)
+    this.sessionTimeout = options.sessionTimeout || 4 * 60 * 60 * 1000; // 4 heures
 
     // Stockage en memoire (reset a chaque redemarrage serveur)
     // SÉCURITÉ: Redémarrage serveur = toutes sessions invalidées
@@ -277,6 +277,71 @@ class PinManager extends EventEmitter {
     }
 
     return cleaned;
+  }
+
+  /**
+   * Obtenir les informations d'une session (pour avertissement expiration)
+   */
+  getSessionInfo(token, ip) {
+    if (!token) return null;
+
+    const session = this.authenticatedSessions.get(token);
+    if (!session) return null;
+
+    // Verifier que l'IP correspond
+    if (session.ip !== ip) return null;
+
+    const now = Date.now();
+    const expiresAt = session.authenticatedAt + this.sessionTimeout;
+    const remainingMs = expiresAt - now;
+
+    // Session expiree
+    if (remainingMs <= 0) {
+      this.authenticatedSessions.delete(token);
+      return null;
+    }
+
+    return {
+      authenticatedAt: session.authenticatedAt,
+      expiresAt,
+      remainingMs,
+      sessionTimeout: this.sessionTimeout
+    };
+  }
+
+  /**
+   * Rafraichir une session (prolonger sans re-authentification)
+   */
+  refreshSession(token, ip) {
+    if (!token) return { success: false, error: 'Token requis' };
+
+    const session = this.authenticatedSessions.get(token);
+    if (!session) return { success: false, error: 'Session introuvable' };
+
+    // Verifier que l'IP correspond
+    if (session.ip !== ip) {
+      return { success: false, error: 'IP non autorisee' };
+    }
+
+    // Verifier que la session n'est pas expiree
+    const now = Date.now();
+    if (now - session.authenticatedAt > this.sessionTimeout) {
+      this.authenticatedSessions.delete(token);
+      return { success: false, error: 'Session expiree' };
+    }
+
+    // Rafraichir la session
+    session.authenticatedAt = now;
+    const expiresAt = now + this.sessionTimeout;
+
+    console.log(`[PinManager] Session rafraichie pour ${ip}`);
+
+    return {
+      success: true,
+      expiresAt,
+      remainingMs: this.sessionTimeout,
+      message: 'Session prolongee'
+    };
   }
 }
 

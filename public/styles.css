@@ -4973,3 +4973,87 @@ body {
   transform: none;
   box-shadow: none;
 }
+
+/* ============================================================================
+   Session Expiration Warning
+   ============================================================================ */
+
+.session-expiration-warning {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  padding: 0.75rem 1rem;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.session-expiration-warning .warning-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  flex-wrap: wrap;
+}
+
+.session-expiration-warning .warning-icon {
+  font-size: 1.25rem;
+}
+
+.session-expiration-warning .warning-text {
+  font-weight: 500;
+  font-size: 0.9375rem;
+}
+
+.session-expiration-warning .btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  border-radius: 0.375rem;
+}
+
+.session-expiration-warning .btn-primary {
+  background: white;
+  color: #d97706;
+  border: none;
+}
+
+.session-expiration-warning .btn-primary:hover {
+  background: #fef3c7;
+}
+
+.session-expiration-warning .btn-ghost {
+  background: transparent;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.session-expiration-warning .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .session-expiration-warning {
+    background: linear-gradient(135deg, #92400e 0%, #78350f 100%);
+  }
+
+  .session-expiration-warning .btn-primary {
+    background: #fef3c7;
+    color: #78350f;
+  }
+}

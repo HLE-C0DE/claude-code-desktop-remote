@@ -82,10 +82,21 @@ let wsReconnectAttempts = 0;
 const WS_HEARTBEAT_MS = 30000; // Ping toutes les 30 secondes
 const WS_RECONNECT_DELAY_BASE = 2000; // Délai de base pour reconnexion
 
+// Session expiration warning
+let sessionExpirationInterval = null;
+const SESSION_CHECK_INTERVAL_MS = 60000; // Vérifier toutes les minutes
+const SESSION_WARNING_THRESHOLD_MS = 5 * 60 * 1000; // Avertir 5 minutes avant expiration
+let sessionExpirationWarningShown = false;
+
 // Gestion des chemins favoris et récents pour nouvelle session
 const RECENT_PATHS_KEY = 'claudeRemote_recentPaths';
 const FAVORITE_PATHS_KEY = 'claudeRemote_favoritePaths';
 const MAX_RECENT_PATHS = 10;
+
+// Draft message persistence (cache pour messages non envoyés)
+const DRAFT_KEY_PREFIX = 'claudeRemote_draft_';
+const DRAFT_DEBOUNCE_MS = 500; // Debounce pour éviter trop d'écritures
+let draftSaveTimeout = null;
 
 // Debug: Log des événements thinking pour analyse
 let thinkingDebugLog = [];
@@ -1373,6 +1384,216 @@ function stopUsageAutoRefresh() {
   }
 }
 
+// ============================================================================
+// Session Expiration Warning
+// ============================================================================
+
+async function checkSessionExpiration() {
+  // Ne pas vérifier si pas authentifié ou pas de PIN requis
+  if (!pinRequired || !isAuthenticated || !sessionToken) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/session-info`, {
+      headers: {
+        'X-Session-Token': sessionToken
+      }
+    });
+
+    const data = await response.json();
+
+    if (!data.sessionValid) {
+      // Session expirée - rediriger vers login
+      console.log('[Session] Session expirée, redirection vers login');
+      handleSessionExpired();
+      return;
+    }
+
+    if (data.noExpiration) {
+      // PIN non activé, pas de timeout
+      return;
+    }
+
+    // Vérifier si on approche de l'expiration
+    if (data.remainingMs <= SESSION_WARNING_THRESHOLD_MS && !sessionExpirationWarningShown) {
+      showSessionExpirationWarning(data.remainingMs);
+    }
+  } catch (error) {
+    console.error('[Session] Erreur vérification expiration:', error);
+  }
+}
+
+function showSessionExpirationWarning(remainingMs) {
+  sessionExpirationWarningShown = true;
+  const minutes = Math.ceil(remainingMs / 60000);
+
+  // Créer la notification d'avertissement
+  const warningDiv = document.createElement('div');
+  warningDiv.id = 'session-expiration-warning';
+  warningDiv.className = 'session-expiration-warning';
+  warningDiv.innerHTML = `
+    <div class="warning-content">
+      <span class="warning-icon">⚠️</span>
+      <span class="warning-text">${t('session.expirationWarning', { minutes })}</span>
+      <button class="btn btn-primary btn-sm" onclick="refreshSession()">${t('session.extendSession')}</button>
+      <button class="btn btn-ghost btn-sm" onclick="dismissSessionWarning()">✕</button>
+    </div>
+  `;
+
+  // Ajouter en haut de la page
+  document.body.insertBefore(warningDiv, document.body.firstChild);
+}
+
+function dismissSessionWarning() {
+  const warning = document.getElementById('session-expiration-warning');
+  if (warning) {
+    warning.remove();
+  }
+}
+
+async function refreshSession() {
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': sessionToken
+      }
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      console.log('[Session] Session prolongée avec succès');
+      sessionExpirationWarningShown = false;
+      dismissSessionWarning();
+      showNotification(t('session.sessionExtended'), 'success');
+    } else {
+      console.error('[Session] Échec prolongation:', data.error);
+      handleSessionExpired();
+    }
+  } catch (error) {
+    console.error('[Session] Erreur prolongation session:', error);
+    handleSessionExpired();
+  }
+}
+
+function handleSessionExpired() {
+  // Nettoyer les tokens
+  authToken = '';
+  sessionToken = '';
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('sessionToken');
+  isAuthenticated = false;
+
+  // Arrêter les intervals
+  stopSessionExpirationCheck();
+  stopUsageAutoRefresh();
+  stopPermissionPolling();
+  stopSessionPolling();
+
+  // Fermer WebSocket
+  if (ws) {
+    ws.close();
+  }
+
+  // Afficher la page de login
+  dismissSessionWarning();
+  renderPinLoginPage();
+}
+
+function startSessionExpirationCheck() {
+  // Arrêter l'ancien interval s'il existe
+  stopSessionExpirationCheck();
+
+  // Vérifier immédiatement
+  checkSessionExpiration();
+
+  // Puis vérifier périodiquement
+  sessionExpirationInterval = setInterval(checkSessionExpiration, SESSION_CHECK_INTERVAL_MS);
+}
+
+function stopSessionExpirationCheck() {
+  if (sessionExpirationInterval) {
+    clearInterval(sessionExpirationInterval);
+    sessionExpirationInterval = null;
+  }
+}
+
+// ============================================================================
+// Draft Message Persistence (cache pour messages non envoyés)
+// ============================================================================
+
+function getDraftKey(sessionId) {
+  return `${DRAFT_KEY_PREFIX}${sessionId}`;
+}
+
+function saveDraft(sessionId, content) {
+  if (!sessionId) return;
+
+  // Debounce pour éviter trop d'écritures
+  if (draftSaveTimeout) {
+    clearTimeout(draftSaveTimeout);
+  }
+
+  draftSaveTimeout = setTimeout(() => {
+    try {
+      if (content && content.trim()) {
+        sessionStorage.setItem(getDraftKey(sessionId), content);
+        console.log(`[Draft] Sauvegardé pour session ${sessionId}`);
+      } else {
+        // Si le contenu est vide, supprimer le draft
+        sessionStorage.removeItem(getDraftKey(sessionId));
+      }
+    } catch (error) {
+      console.error('[Draft] Erreur sauvegarde:', error);
+    }
+  }, DRAFT_DEBOUNCE_MS);
+}
+
+function loadDraft(sessionId) {
+  if (!sessionId) return '';
+
+  try {
+    const draft = sessionStorage.getItem(getDraftKey(sessionId));
+    if (draft) {
+      console.log(`[Draft] Restauré pour session ${sessionId}`);
+    }
+    return draft || '';
+  } catch (error) {
+    console.error('[Draft] Erreur chargement:', error);
+    return '';
+  }
+}
+
+function clearDraft(sessionId) {
+  if (!sessionId) return;
+
+  try {
+    sessionStorage.removeItem(getDraftKey(sessionId));
+    console.log(`[Draft] Supprimé pour session ${sessionId}`);
+  } catch (error) {
+    console.error('[Draft] Erreur suppression:', error);
+  }
+}
+
+function initDraftListener(sessionId) {
+  const messageInput = document.getElementById('message-input');
+  if (!messageInput || !sessionId) return;
+
+  // Restaurer le draft existant
+  const savedDraft = loadDraft(sessionId);
+  if (savedDraft) {
+    messageInput.value = savedDraft;
+  }
+
+  // Ajouter le listener pour sauvegarder à chaque frappe
+  messageInput.addEventListener('input', () => {
+    saveDraft(sessionId, messageInput.value);
+  });
+}
+
 function renderHomePage() {
   const sessionsList = Object.values(sessions).sort((a, b) => {
     return new Date(b.lastActivity) - new Date(a.lastActivity);
@@ -1627,6 +1848,9 @@ function renderSessionPage(session) {
 
   // Initialiser le redimensionnement de la conversation
   initResizableConversation();
+
+  // Initialiser le système de draft pour le message input
+  initDraftListener(session.id);
 
   // Initialiser la tasklist et le thinking indicator
   setTimeout(() => {
@@ -2481,6 +2705,8 @@ async function handleSendMessage(sessionId) {
   try {
     await sendMessage(sessionId, message);
     input.value = '';
+    // Supprimer le draft après envoi réussi
+    clearDraft(sessionId);
     alert('Message envoyé ! Claude Code devrait le traiter prochainement.');
 
     // Recharger la session après 2 secondes
@@ -2513,6 +2739,8 @@ async function handleInjectMessage(sessionId) {
 
     if (result.success) {
       input.value = '';
+      // Supprimer le draft après envoi réussi
+      clearDraft(sessionId);
       showInjectionNotification('Message envoyé via CDP', 'success');
 
       // Recharger immédiatement la session pour afficher le message utilisateur
@@ -4659,6 +4887,9 @@ async function initializeApp() {
 
   // Démarrer le polling des permissions CDP
   startPermissionPolling();
+
+  // Démarrer la vérification d'expiration de session
+  startSessionExpirationCheck();
 
   // Initialiser les event listeners pour les logs serveur
   initializeServerLogsListeners();

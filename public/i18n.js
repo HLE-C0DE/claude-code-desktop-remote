@@ -185,7 +185,10 @@ const translations = {
             messagePlaceholder: "Tapez votre message pour Claude...",
             sendBtn: "Envoyer",
             interruptBtn: "Interrompre",
-            noMessagesInSession: "Aucun message dans cette session"
+            noMessagesInSession: "Aucun message dans cette session",
+            expirationWarning: "Votre session expire dans {minutes} minute(s)",
+            extendSession: "Prolonger la session",
+            sessionExtended: "Session prolongée avec succès"
         },
 
         // Context widget
@@ -409,7 +412,10 @@ const translations = {
             messagePlaceholder: "Type your message for Claude...",
             sendBtn: "Send",
             interruptBtn: "Interrupt",
-            noMessagesInSession: "No messages in this session"
+            noMessagesInSession: "No messages in this session",
+            expirationWarning: "Your session expires in {minutes} minute(s)",
+            extendSession: "Extend session",
+            sessionExtended: "Session extended successfully"
         },
 
         // Context widget

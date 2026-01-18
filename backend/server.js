@@ -401,6 +401,69 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Deconnexion reussie' });
 });
 
+// Informations sur la session (temps restant avant expiration)
+app.get('/api/auth/session-info', (req, res) => {
+  const sessionToken = req.headers['x-session-token'];
+  const ip = pinManager.getClientIP(req);
+
+  if (!pinManager.isPinEnabled()) {
+    // PIN non active, pas de timeout
+    return res.json({
+      pinEnabled: false,
+      sessionValid: true,
+      noExpiration: true
+    });
+  }
+
+  const sessionInfo = pinManager.getSessionInfo(sessionToken, ip);
+
+  if (!sessionInfo) {
+    return res.status(401).json({
+      sessionValid: false,
+      error: 'Session invalide ou expiree'
+    });
+  }
+
+  res.json({
+    pinEnabled: true,
+    sessionValid: true,
+    authenticatedAt: sessionInfo.authenticatedAt,
+    expiresAt: sessionInfo.expiresAt,
+    remainingMs: sessionInfo.remainingMs,
+    sessionTimeout: sessionInfo.sessionTimeout
+  });
+});
+
+// Rafraichir la session (prolonger sans re-authentification)
+app.post('/api/auth/refresh', (req, res) => {
+  const sessionToken = req.headers['x-session-token'];
+  const ip = pinManager.getClientIP(req);
+
+  if (!pinManager.isPinEnabled()) {
+    return res.json({
+      success: true,
+      noExpiration: true,
+      message: 'PIN non active, pas de timeout'
+    });
+  }
+
+  const result = pinManager.refreshSession(sessionToken, ip);
+
+  if (result.success) {
+    res.json({
+      success: true,
+      expiresAt: result.expiresAt,
+      remainingMs: result.remainingMs,
+      message: result.message
+    });
+  } else {
+    res.status(401).json({
+      success: false,
+      error: result.error
+    });
+  }
+});
+
 // Statistiques de securite (pour l'admin/debug)
 app.get('/api/auth/stats', pinAuthMiddleware, (req, res) => {
   res.json(pinManager.getStats());
