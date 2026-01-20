@@ -1,0 +1,65 @@
+{
+  "$schema": "./schema.json",
+  "id": "subsession-doc",
+  "name": "Documentation (SubSession Mode)",
+  "description": "Generate documentation using the natural SubSession system. Claude spawns Task agents naturally and results are automatically returned to the main session.",
+  "icon": "book-open",
+  "version": "2.0.0",
+  "author": "system",
+  "tags": ["documentation", "subsession", "natural-flow", "task-agents"],
+
+  "extends": "_default",
+
+  "config": {
+    "maxWorkers": 5,
+    "workerTimeout": 600000,
+    "autoSpawn": false,
+    "parallelExecution": true,
+    "useSubSessions": true,
+    "inactivityThreshold": 60000,
+    "confirmationDelay": 30000
+  },
+
+  "phases": {
+    "analysis": {
+      "enabled": true,
+      "timeout": 300000
+    },
+    "taskPlanning": {
+      "enabled": false
+    },
+    "workerExecution": {
+      "enabled": false
+    },
+    "aggregation": {
+      "enabled": false
+    },
+    "verification": {
+      "enabled": false
+    }
+  },
+
+  "prompts": {
+    "analysis": {
+      "system": "# DOCUMENTATION TASK - SubSession Mode\n\nYou are tasked with generating documentation for this project. You have access to the Task tool to spawn specialized agents when needed.\n\n## How SubSession Mode Works\n\n1. **You naturally use Task agents**: When you need to explore, analyze, or document specific parts of the codebase, use the Task tool with appropriate subagent_types.\n\n2. **Results are automatically returned**: When a Task agent finishes its work (detected by 60+ seconds of inactivity), its last message is automatically sent back to you.\n\n3. **No special format required**: Just work naturally. You don't need to use any special delimiters or JSON formats.\n\n4. **Focus on quality**: Your goal is to produce excellent documentation, not to follow a specific protocol.\n\n## Available Task Subagent Types\n\n- **Explore**: For quickly exploring the codebase structure, finding files, searching code\n- **general-purpose**: For complex multi-step tasks, detailed analysis, writing documentation\n- **Plan**: For designing implementation strategies (useful for planning doc structure)\n\n## Documentation Guidelines\n\n### For API Documentation:\n- Document each endpoint: method, path, description\n- List parameters with types and descriptions\n- Show request/response examples\n- Note authentication requirements\n\n### For Module Documentation:\n- Describe purpose and responsibility\n- Document public API\n- Show usage examples\n- Note dependencies\n\n### For Configuration Documentation:\n- List all options with descriptions\n- Document defaults and environment variables\n- Include example configurations\n\n## Your Workflow\n\n1. **Explore first**: Use Task(Explore) to understand the codebase structure\n2. **Plan the documentation**: Decide what sections/files to document\n3. **Spawn workers as needed**: Use Task(general-purpose) for each major documentation section\n4. **Aggregate results**: Once all Task results return, combine them into final documentation\n5. **Write the output**: Create the final documentation files\n\n## Settings\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n{CUSTOM_INSTRUCTIONS}\n\n## Important Notes\n\n- Results from Task agents will be injected into this conversation with the prefix **[Resultat de sous-tache]**\n- Wait for Task results before moving to the next step\n- You can run multiple Task agents in parallel by making multiple tool calls in one message\n- Keep track of what documentation you've assigned to each Task agent",
+      "user": "Please document this project:\n\n{USER_REQUEST}\n\nWorking Directory: {CWD}\nProject Name: {PROJECT_NAME}\n\nStart by exploring the codebase to understand its structure, then create comprehensive documentation.",
+      "format": {}
+    }
+  },
+
+  "variables": {
+    "OUTPUT_FORMAT": "markdown",
+    "LANGUAGE": "english",
+    "VERBOSITY": "detailed",
+    "INCLUDE_EXAMPLES": true
+  },
+
+  "ui": {
+    "color": "#10B981",
+    "icon": "book-open",
+    "showWorkerDetails": false,
+    "showTokenEstimate": false,
+    "showProgressBar": false,
+    "progressStyle": "simple"
+  }
+}

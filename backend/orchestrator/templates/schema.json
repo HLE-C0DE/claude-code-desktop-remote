@@ -1,0 +1,450 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "orchestrator-template-schema",
+  "title": "Orchestrator Template Schema",
+  "description": "JSON Schema for validating orchestrator template files",
+  "type": "object",
+  "required": ["id", "name", "prompts"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema file"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Unique template identifier (lowercase, hyphens, underscores allowed)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable template name"
+    },
+    "description": {
+      "type": "string",
+      "description": "What this template does"
+    },
+    "icon": {
+      "type": "string",
+      "description": "Emoji or icon class for UI display"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version (e.g., 1.0.0)"
+    },
+    "author": {
+      "type": "string",
+      "description": "Template author (system or username)"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tags for categorization and search"
+    },
+    "extends": {
+      "type": "string",
+      "description": "Parent template ID to inherit from"
+    },
+    "config": {
+      "$ref": "#/definitions/config"
+    },
+    "phases": {
+      "$ref": "#/definitions/phases"
+    },
+    "prompts": {
+      "$ref": "#/definitions/prompts"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" }
+        ]
+      },
+      "description": "Custom variables for prompt substitution"
+    },
+    "hooks": {
+      "$ref": "#/definitions/hooks"
+    },
+    "ui": {
+      "$ref": "#/definitions/ui"
+    }
+  },
+  "definitions": {
+    "config": {
+      "type": "object",
+      "properties": {
+        "maxWorkers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5,
+          "description": "Maximum concurrent worker sessions"
+        },
+        "workerTimeout": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 3600000,
+          "default": 300000,
+          "description": "Worker timeout in milliseconds"
+        },
+        "autoSpawn": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-spawn workers without confirmation"
+        },
+        "parallelExecution": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow parallel worker execution"
+        },
+        "retryOnError": {
+          "type": "boolean",
+          "default": true,
+          "description": "Retry failed workers"
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 2,
+          "description": "Maximum retry attempts per worker"
+        },
+        "sessionPrefix": {
+          "type": "string",
+          "default": "__orch_",
+          "description": "Prefix for hidden worker sessions"
+        },
+        "pollInterval": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 30000,
+          "default": 2000,
+          "description": "Transcript polling interval in milliseconds"
+        },
+        "hideWorkersFromList": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide worker sessions from main session list"
+        }
+      },
+      "additionalProperties": false
+    },
+    "phases": {
+      "type": "object",
+      "properties": {
+        "analysis": {
+          "$ref": "#/definitions/analysisPhase"
+        },
+        "taskPlanning": {
+          "$ref": "#/definitions/taskPlanningPhase"
+        },
+        "workerExecution": {
+          "$ref": "#/definitions/workerExecutionPhase"
+        },
+        "aggregation": {
+          "$ref": "#/definitions/aggregationPhase"
+        },
+        "verification": {
+          "$ref": "#/definitions/verificationPhase"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisPhase": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 10000,
+          "default": 120000
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "required": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "subagentType": {
+              "type": "string",
+              "enum": ["Explore", "Code", "Edit"]
+            }
+          }
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "requiredFields": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "taskPlanningPhase": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 10000,
+          "default": 180000
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "minTasks": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "maxTasks": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 50
+            },
+            "requireDependencies": {
+              "type": "boolean",
+              "default": false
+            },
+            "requireScope": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "workerExecutionPhase": {
+      "type": "object",
+      "properties": {
+        "progressReporting": {
+          "type": "boolean",
+          "default": true
+        },
+        "progressInterval": {
+          "type": "integer",
+          "minimum": 5000,
+          "default": 30000
+        },
+        "completionMarkers": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "aggregationPhase": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 10000,
+          "default": 300000
+        },
+        "mergeStrategy": {
+          "type": "string",
+          "enum": ["concatenate", "smart-merge", "manual"],
+          "default": "concatenate"
+        },
+        "conflictResolution": {
+          "type": "string",
+          "enum": ["ask", "first-wins", "last-wins", "smart"],
+          "default": "ask"
+        }
+      },
+      "additionalProperties": false
+    },
+    "verificationPhase": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 10000,
+          "default": 180000
+        },
+        "autoFix": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "prompts": {
+      "type": "object",
+      "required": ["analysis", "taskPlanning", "worker", "aggregation"],
+      "properties": {
+        "responseFormat": {
+          "type": "object",
+          "properties": {
+            "delimiterStart": {
+              "type": "string",
+              "default": "<<<ORCHESTRATOR_RESPONSE>>>"
+            },
+            "delimiterEnd": {
+              "type": "string",
+              "default": "<<<END_ORCHESTRATOR_RESPONSE>>>"
+            },
+            "type": {
+              "type": "string",
+              "enum": ["json", "yaml", "text"],
+              "default": "json"
+            }
+          }
+        },
+        "analysis": {
+          "$ref": "#/definitions/promptDefinition"
+        },
+        "taskPlanning": {
+          "$ref": "#/definitions/promptDefinition"
+        },
+        "worker": {
+          "$ref": "#/definitions/promptDefinition"
+        },
+        "aggregation": {
+          "$ref": "#/definitions/promptDefinition"
+        },
+        "verification": {
+          "$ref": "#/definitions/promptDefinition"
+        }
+      },
+      "additionalProperties": false
+    },
+    "promptDefinition": {
+      "type": "object",
+      "required": ["system"],
+      "properties": {
+        "system": {
+          "type": "string",
+          "minLength": 1,
+          "description": "System prompt template"
+        },
+        "user": {
+          "type": "string",
+          "description": "User prompt template"
+        },
+        "format": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string"
+            },
+            "requiredFields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "optionalFields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "taskSchema": {
+              "type": "object",
+              "properties": {
+                "required": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "optional": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "progressPhase": {
+              "type": "string"
+            },
+            "completionPhase": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "onAnalysisComplete": {
+          "type": ["string", "null"]
+        },
+        "onTasksGenerated": {
+          "type": ["string", "null"]
+        },
+        "onWorkerStart": {
+          "type": ["string", "null"]
+        },
+        "onWorkerComplete": {
+          "type": ["string", "null"]
+        },
+        "onAllWorkersComplete": {
+          "type": ["string", "null"]
+        },
+        "onError": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "showWorkerDetails": {
+          "type": "boolean",
+          "default": true
+        },
+        "showTokenEstimate": {
+          "type": "boolean",
+          "default": true
+        },
+        "showProgressBar": {
+          "type": "boolean",
+          "default": true
+        },
+        "progressStyle": {
+          "type": "string",
+          "enum": ["minimal", "detailed", "compact"],
+          "default": "detailed"
+        },
+        "workerColumns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["status", "progress", "tools", "time", "tokens", "files"]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

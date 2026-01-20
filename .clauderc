@@ -1,0 +1,69 @@
+# Claude Code Configuration for ClaudeCode_Remote
+
+## MANDATORY DOCUMENTATION POLICY
+
+**CRITICAL**: All AI agents (Claude, etc.) working on this codebase MUST read relevant documentation from `DocClaude/` BEFORE making any changes.
+
+### Documentation Location
+DocClaude/
+
+### Master Documentation Index
+DocClaude/DocClaude_00_INDEX.md
+
+### Search Guide
+DocClaude/SEARCH_GUIDE.md - How to search documentation using Grep and Read tools
+
+### Pre-Task Checklist
+- [ ] Read DocClaude_00_INDEX.md for project overview
+- [ ] Identify relevant documentation file(s) for your task
+- [ ] Read COMPLETE documentation (PART 1 + PART 2)
+- [ ] Study code examples in documentation
+- [ ] Reference API signatures from PART 2
+- [ ] NOW read actual source files
+- [ ] Implement following documented patterns
+
+### Documentation Files
+- Authentication/Security: DocClaude/DocClaude_Authentication.md
+- CDP Injection: DocClaude/DocClaude_CDPInjection.md
+- Session Management: DocClaude/DocClaude_SessionManagement.md
+- Orchestrator: DocClaude/DocClaude_Orchestrator.md
+- Frontend: DocClaude/DocClaude_Frontend.md
+- WebSocket: DocClaude/DocClaude_WebSocket.md
+- API Endpoints: DocClaude/DocClaude_APIEndpoints.md
+- i18n: DocClaude/DocClaude_i18n.md
+- Usage Tracking: DocClaude/DocClaude_UsageTracking.md
+
+### Rules
+1. Documentation is the PRIMARY reference, not the code
+2. Never guess at implementations - they're documented
+3. Follow documented patterns and conventions
+4. Update documentation when you change behavior
+5. All 87+ API endpoints are documented - use them
+6. All 46 WebSocket events are catalogued - reference them
+7. All data structures have TypeScript-style definitions
+
+### Quick Reference by Task
+- Bug fixes → Read relevant docs first to understand current implementation
+- New features → Read ALL related docs to understand architecture
+- Refactoring → Read docs to identify ALL dependencies
+- API changes → Check DocClaude_APIEndpoints.md for existing patterns
+- UI changes → Check DocClaude_Frontend.md for component structure
+- Auth changes → Check DocClaude_Authentication.md for security implications
+
+### Documentation Quality
+- 200,000+ words of technical documentation
+- 500+ code examples
+- Complete API reference for all functions
+- Data structure definitions
+- Sequence diagrams
+- Error handling guides
+- Security considerations
+- Performance characteristics
+
+### Enforcement
+This is NOT a suggestion. Reading documentation first is MANDATORY to:
+- Prevent bugs from misunderstanding existing systems
+- Maintain consistency with established patterns
+- Avoid recreating existing functionality
+- Preserve architectural integrity
+- Speed up development (docs are faster than code archaeology)

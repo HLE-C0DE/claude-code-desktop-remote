@@ -240,14 +240,21 @@ class CDPController {
     /**
      * Get all sessions from Claude Desktop (with caching)
      * OPTIMIZED: Charge un compte de messages approximatif pour chaque session
+     * @param {boolean} forceRefresh - Force refresh from CDP instead of using cache
+     * @param {boolean} includeHidden - Include hidden orchestrator worker sessions (default: false)
      */
-    async getAllSessions(forceRefresh = false) {
+    async getAllSessions(forceRefresh = false, includeHidden = false) {
         // Vérifier le cache
         const now = Date.now();
         if (!forceRefresh &&
             this.cache.sessions &&
             (now - this.cache.sessionsTimestamp) < this.cache.sessionsCacheDuration) {
-            return this.cache.sessions;
+            let sessions = this.cache.sessions;
+            // Filter hidden orchestrator workers unless explicitly included
+            if (!includeHidden) {
+                sessions = sessions.filter(s => !s.sessionId || !s.sessionId.includes('__orch_'));
+            }
+            return sessions;
         }
 
         const sessions = await this.executeJS(`
@@ -267,9 +274,14 @@ class CDPController {
             })()
         `);
 
-        // Mettre en cache
+        // Mettre en cache (always cache the full list including hidden)
         this.cache.sessions = sessions;
         this.cache.sessionsTimestamp = now;
+
+        // Filter hidden orchestrator workers unless explicitly included
+        if (!includeHidden) {
+            return sessions.filter(s => !s.sessionId || !s.sessionId.includes('__orch_'));
+        }
 
         return sessions;
     }

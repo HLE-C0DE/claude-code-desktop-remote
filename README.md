@@ -64,14 +64,28 @@ claude-remote/
 │   └── styles.css
 ├── docs/
 │   ├── API.md
-│   ├── CLOUDFLARE_TUNNEL.md
-│   └── TROUBLESHOOTING.md
 ├── scripts/
 └── launch.bat
 ```
 
 ### Documentation
 
+**🚨 FOR DEVELOPERS/AI AGENTS: START HERE! 🚨**
+
+**Comprehensive Technical Documentation**: [DocClaude/](DocClaude/) — **MANDATORY reading before modifying code**
+
+- **[Master Index](DocClaude/DocClaude_00_INDEX.md)** ⭐ Start here for complete overview
+- **[Quick Reference](DocClaude/README.md)** — Task-based documentation lookup
+
+The `DocClaude/` directory contains **~200,000 words** of detailed technical documentation covering:
+- All 87+ API endpoints
+- Complete architecture explanations
+- 46 WebSocket events
+- 100+ functions with signatures
+- 500+ code examples
+- Security, authentication, sessions, orchestrator, frontend, CDP, i18n, and more
+
+**User Documentation**:
 - [API Reference](docs/API.md)
 - [Cloudflare Tunnel Setup](docs/CLOUDFLARE_TUNNEL.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
@@ -144,8 +158,6 @@ claude-remote/
 │   └── styles.css
 ├── docs/
 │   ├── API.md
-│   ├── CLOUDFLARE_TUNNEL.md
-│   └── TROUBLESHOOTING.md
 ├── scripts/
 └── launch.bat
 ```

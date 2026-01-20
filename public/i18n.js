@@ -165,7 +165,40 @@ const translations = {
             addFavoritesHint: "Ajoutez des chemins en favoris depuis le modal \"Nouvelle session\".",
             nicknamePlaceholder: "Surnom (optionnel)",
             errorCreating: "Erreur lors de la création",
-            errorMessage: "Erreur: {message}"
+            errorMessage: "Erreur: {message}",
+            // Orchestrator options
+            sessionType: "Type de session",
+            sessionTypeClassic: "Classique",
+            sessionTypeClassicDesc: "Session normale avec Claude",
+            sessionTypeOrchestrator: "Orchestrateur (Big Tasks)",
+            sessionTypeOrchestratorDesc: "Taches complexes avec workers paralleles",
+            templateLabel: "Template",
+            templatePlaceholder: "Selectionner un template...",
+            templateSystemGroup: "Templates Systeme",
+            templateUserGroup: "Mes Templates",
+            templateManage: "Gerer les templates...",
+            advancedOptions: "Options avancees",
+            autoSpawnWorkers: "Spawn automatique des workers",
+            maxWorkersLabel: "Max workers paralleles",
+            customVariables: "Variables custom",
+            editVariables: "Editer...",
+            orchestratorCreating: "Creation de l'orchestrateur...",
+            orchestratorCreated: "Orchestrateur cree avec succes!",
+            orchestratorError: "Erreur lors de la creation de l'orchestrateur",
+            noTemplatesAvailable: "Aucun template disponible",
+            loadingTemplates: "Chargement des templates..."
+        },
+
+        // Orchestrator variables editor
+        orchestratorVariables: {
+            title: "Variables du Template",
+            description: "Ces variables personnalisent le comportement du template.",
+            cancelBtn: "Annuler",
+            applyBtn: "Appliquer",
+            addVariable: "Ajouter une variable",
+            variableName: "Nom",
+            variableValue: "Valeur",
+            removeVariable: "Supprimer"
         },
 
         // Session details
@@ -392,7 +425,40 @@ const translations = {
             addFavoritesHint: "Add paths to favorites from the \"New session\" modal.",
             nicknamePlaceholder: "Nickname (optional)",
             errorCreating: "Error while creating",
-            errorMessage: "Error: {message}"
+            errorMessage: "Error: {message}",
+            // Orchestrator options
+            sessionType: "Session type",
+            sessionTypeClassic: "Classic",
+            sessionTypeClassicDesc: "Normal session with Claude",
+            sessionTypeOrchestrator: "Orchestrator (Big Tasks)",
+            sessionTypeOrchestratorDesc: "Complex tasks with parallel workers",
+            templateLabel: "Template",
+            templatePlaceholder: "Select a template...",
+            templateSystemGroup: "System Templates",
+            templateUserGroup: "My Templates",
+            templateManage: "Manage templates...",
+            advancedOptions: "Advanced options",
+            autoSpawnWorkers: "Auto-spawn workers",
+            maxWorkersLabel: "Max parallel workers",
+            customVariables: "Custom variables",
+            editVariables: "Edit...",
+            orchestratorCreating: "Creating orchestrator...",
+            orchestratorCreated: "Orchestrator created successfully!",
+            orchestratorError: "Error creating orchestrator",
+            noTemplatesAvailable: "No templates available",
+            loadingTemplates: "Loading templates..."
+        },
+
+        // Orchestrator variables editor
+        orchestratorVariables: {
+            title: "Template Variables",
+            description: "These variables customize the template behavior.",
+            cancelBtn: "Cancel",
+            applyBtn: "Apply",
+            addVariable: "Add variable",
+            variableName: "Name",
+            variableValue: "Value",
+            removeVariable: "Remove"
         },
 
         // Session details

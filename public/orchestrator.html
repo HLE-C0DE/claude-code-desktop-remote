@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orchestrator Dashboard - Claude Code Remote</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .orchestrator-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .orchestrator-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+
+        .orchestrator-header h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+
+        .orchestrator-meta {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .phase-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 10px;
+        }
+
+        .phase-analysis { background: #3b82f6; color: white; }
+        .phase-planning { background: #8b5cf6; color: white; }
+        .phase-running { background: #10b981; color: white; }
+        .phase-aggregating { background: #f59e0b; color: white; }
+        .phase-completed { background: #6b7280; color: white; }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .status-created { background: #e5e7eb; color: #374151; }
+        .status-analyzing { background: #dbeafe; color: #1e40af; }
+        .status-planning { background: #ede9fe; color: #5b21b6; }
+        .status-running { background: #d1fae5; color: #065f46; }
+        .status-completed { background: #d1d5db; color: #1f2937; }
+        .status-error { background: #fee2e2; color: #991b1b; }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 3px;
+            margin-top: 15px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: white;
+            transition: width 0.3s ease;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 500;
+            color: #6b7280;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: #374151;
+            background: #f9fafb;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .info-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .info-card h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #374151;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .info-item {
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 6px;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 4px;
+        }
+
+        .info-value {
+            font-size: 15px;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .worker-list {
+            display: grid;
+            gap: 15px;
+        }
+
+        .worker-card {
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.2s;
+        }
+
+        .worker-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+        }
+
+        .worker-card.completed {
+            border-color: #10b981;
+            background: #f0fdf4;
+        }
+
+        .worker-card.running {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+
+        .worker-card.failed {
+            border-color: #ef4444;
+            background: #fef2f2;
+        }
+
+        .worker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 10px;
+        }
+
+        .worker-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #111827;
+            flex: 1;
+        }
+
+        .worker-status {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .worker-description {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 10px;
+        }
+
+        .worker-progress {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 8px;
+        }
+
+        .json-view {
+            background: #1f2937;
+            color: #f9fafb;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6b7280;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #fef2f2;
+            border: 2px solid #fecaca;
+            border-radius: 8px;
+            padding: 20px;
+            color: #991b1b;
+            margin: 20px 0;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d5db;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* Chat input styles */
+        .chat-input-container {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input-container textarea {
+            flex: 1;
+            min-height: 80px;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            transition: border-color 0.2s;
+        }
+
+        .chat-input-container textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .chat-input-container button {
+            height: 44px;
+            padding: 0 24px;
+        }
+
+        .sending {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-card .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .stat-card .stat-label {
+            font-size: 12px;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .stat-card.highlight {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .stat-card.highlight .stat-value,
+        .stat-card.highlight .stat-label {
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="orchestrator-container">
+        <!-- Header -->
+        <div class="orchestrator-header">
+            <h1 id="orchestrator-title">
+                <span id="template-name">Loading...</span>
+                <span id="phase-badge" class="phase-badge">...</span>
+                <span id="status-badge" class="status-badge">...</span>
+            </h1>
+            <div class="orchestrator-meta">
+                <div>ID: <strong id="orchestrator-id">...</strong></div>
+                <div>Created: <strong id="created-at">...</strong></div>
+                <div id="main-session-link"></div>
+            </div>
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" data-tab="overview">📊 Overview</button>
+            <button class="tab" data-tab="tasks">📋 Tasks</button>
+            <button class="tab" data-tab="workers">⚙️ Workers</button>
+            <button class="tab" data-tab="stats">📈 Statistics</button>
+            <button class="tab" data-tab="raw">🔍 Raw Data</button>
+        </div>
+
+        <!-- Overview Tab -->
+        <div id="tab-overview" class="tab-content active">
+            <div class="info-card">
+                <h3>Orchestrator Info</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Status</div>
+                        <div class="info-value" id="info-status">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Current Phase</div>
+                        <div class="info-value" id="info-phase">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Template</div>
+                        <div class="info-value" id="info-template">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Working Directory</div>
+                        <div class="info-value" id="info-cwd">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <h3>Progress</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Total Tasks</div>
+                        <div class="info-value" id="progress-total">0</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Completed</div>
+                        <div class="info-value" id="progress-completed">0</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Running</div>
+                        <div class="info-value" id="progress-running">0</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Failed</div>
+                        <div class="info-value" id="progress-failed">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <h3>User Request</h3>
+                <p id="user-request" style="color: #374151; line-height: 1.6;">-</p>
+            </div>
+
+            <div class="info-card">
+                <h3>Send Message</h3>
+                <div class="chat-input-container">
+                    <textarea id="chat-input" placeholder="Write a message to the orchestrator..." onkeydown="handleChatKeydown(event)"></textarea>
+                    <button id="btn-send" class="btn btn-primary" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tasks Tab -->
+        <div id="tab-tasks" class="tab-content">
+            <div class="info-card">
+                <h3>Tasks</h3>
+                <div id="tasks-list" class="loading">
+                    <div class="loading-spinner"></div>
+                    <div>Loading tasks...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workers Tab -->
+        <div id="tab-workers" class="tab-content">
+            <div class="info-card">
+                <h3>Worker Sessions</h3>
+                <div id="workers-list" class="loading">
+                    <div class="loading-spinner"></div>
+                    <div>Loading workers...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistics Tab -->
+        <div id="tab-stats" class="tab-content">
+            <div class="info-card">
+                <h3>Tool Usage Statistics</h3>
+                <p style="color: #6b7280; margin-bottom: 16px;">Aggregated statistics from the main session and all workers</p>
+                <div class="stats-grid">
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="stats-total">0</div>
+                        <div class="stat-label">Total Tools</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-reads">0</div>
+                        <div class="stat-label">Reads</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-writes">0</div>
+                        <div class="stat-label">Writes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-edits">0</div>
+                        <div class="stat-label">Edits</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-bash">0</div>
+                        <div class="stat-label">Bash</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-glob">0</div>
+                        <div class="stat-label">Glob</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-grep">0</div>
+                        <div class="stat-label">Grep</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-task">0</div>
+                        <div class="stat-label">Task</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stats-other">0</div>
+                        <div class="stat-label">Other</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Raw Data Tab -->
+        <div id="tab-raw" class="tab-content">
+            <div class="info-card">
+                <h3>Raw JSON Data</h3>
+                <pre id="raw-data" class="json-view">Loading...</pre>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button class="btn btn-secondary" onclick="window.location.href='/'">← Back to Sessions</button>
+            <button id="btn-refresh" class="btn btn-primary" onclick="loadOrchestrator()">🔄 Refresh</button>
+        </div>
+    </div>
+
+    <script>
+        // Authentication state
+        let sessionToken = '';
+        let isAuthenticated = false;
+        let refreshInterval = null;
+
+        // Get orchestrator ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const orchestratorId = urlParams.get('id');
+
+        if (!orchestratorId) {
+            document.querySelector('.orchestrator-container').innerHTML = `
+                <div class="error-message">
+                    <h2>No Orchestrator ID</h2>
+                    <p>Please provide an orchestrator ID in the URL: ?id=orch_xxx</p>
+                    <button class="btn btn-secondary" onclick="window.location.href='/'">Back to Sessions</button>
+                </div>
+            `;
+        }
+
+        // Check if PIN authentication is required
+        async function checkAuthStatus() {
+            try {
+                const response = await fetch('/api/auth/status');
+                const data = await response.json();
+
+                if (!data.pinEnabled) {
+                    // No PIN required, allow access
+                    isAuthenticated = true;
+                    return true;
+                }
+
+                // PIN is enabled - check if we have a valid session
+                // Try to get token from localStorage (set by main app after login)
+                const storedToken = localStorage.getItem('sessionToken');
+                if (storedToken) {
+                    // Verify the token is still valid
+                    const verifyResponse = await fetch('/api/auth/session-info', {
+                        headers: { 'X-Session-Token': storedToken }
+                    });
+                    const verifyData = await verifyResponse.json();
+
+                    if (verifyData.valid) {
+                        sessionToken = storedToken;
+                        isAuthenticated = true;
+                        return true;
+                    }
+                }
+
+                // No valid session - need to authenticate
+                return false;
+            } catch (error) {
+                console.error('Auth status check failed:', error);
+                return false;
+            }
+        }
+
+        // Redirect to main page for authentication
+        function redirectToLogin() {
+            const returnUrl = encodeURIComponent(window.location.href);
+            window.location.href = `/?authRedirect=${returnUrl}`;
+        }
+
+        // Authenticated API request wrapper
+        async function apiRequest(endpoint, options = {}) {
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            if (sessionToken) {
+                headers['X-Session-Token'] = sessionToken;
+            }
+
+            const response = await fetch(endpoint, {
+                ...options,
+                headers
+            });
+
+            // Handle auth errors
+            if (response.status === 401) {
+                const data = await response.json();
+                if (data.pinRequired) {
+                    // Session expired or invalid - redirect to login
+                    localStorage.removeItem('sessionToken');
+                    redirectToLogin();
+                    throw new Error('Authentication required');
+                }
+            }
+
+            return response.json();
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+
+                // Update active tab
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                // Update active content
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                document.getElementById(`tab-${tabName}`).classList.add('active');
+            });
+        });
+
+        async function loadOrchestrator() {
+            try {
+                const result = await apiRequest(`/api/orchestrator/${orchestratorId}`);
+
+                if (!result.success) {
+                    throw new Error(result.message || 'Failed to load orchestrator');
+                }
+
+                const orch = result.orchestrator;
+                updateUI(orch);
+
+            } catch (error) {
+                console.error('Failed to load orchestrator:', error);
+                document.querySelector('.orchestrator-header').innerHTML = `
+                    <div class="error-message">
+                        <h2>❌ Error Loading Orchestrator</h2>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function updateUI(orch) {
+            // Header
+            document.getElementById('template-name').textContent = orch.template?.name || orch.templateId;
+            document.getElementById('orchestrator-id').textContent = orch.id;
+            document.getElementById('created-at').textContent = new Date(orch.createdAt).toLocaleString();
+
+            // Phase badge
+            const phaseBadge = document.getElementById('phase-badge');
+            phaseBadge.textContent = orch.currentPhase;
+            phaseBadge.className = `phase-badge phase-${orch.currentPhase.toLowerCase()}`;
+
+            // Status badge
+            const statusBadge = document.getElementById('status-badge');
+            statusBadge.textContent = orch.status;
+            statusBadge.className = `status-badge status-${orch.status}`;
+
+            // Main session link
+            if (orch.mainSessionId) {
+                document.getElementById('main-session-link').innerHTML =
+                    `Main Session: <a href="/?session=${orch.mainSessionId}" style="color: white; text-decoration: underline;">${orch.mainSessionId}</a>`;
+            }
+
+            // Progress bar
+            const workers = Object.values(orch.workers || {});
+            const completedCount = workers.filter(w => w.status === 'completed').length;
+            const totalCount = workers.length;
+            const progressPercent = totalCount > 0 ? (completedCount / totalCount * 100) : 0;
+            document.getElementById('progress-fill').style.width = `${progressPercent}%`;
+
+            // Overview tab
+            document.getElementById('info-status').textContent = orch.status;
+            document.getElementById('info-phase').textContent = orch.currentPhase;
+            document.getElementById('info-template').textContent = orch.template?.name || orch.templateId;
+            document.getElementById('info-cwd').textContent = orch.cwd;
+            document.getElementById('user-request').textContent = orch.userRequest;
+
+            // Progress stats
+            const running = workers.filter(w => ['running', 'spawning'].includes(w.status)).length;
+            const failed = workers.filter(w => ['failed', 'timeout', 'cancelled'].includes(w.status)).length;
+
+            document.getElementById('progress-total').textContent = totalCount;
+            document.getElementById('progress-completed').textContent = completedCount;
+            document.getElementById('progress-running').textContent = running;
+            document.getElementById('progress-failed').textContent = failed;
+
+            // Tasks tab
+            renderTasks(orch.tasks || []);
+
+            // Workers tab
+            renderWorkers(workers);
+
+            // Statistics tab
+            updateStats(orch);
+
+            // Raw data tab
+            document.getElementById('raw-data').textContent = JSON.stringify(orch, null, 2);
+        }
+
+        function updateStats(orch) {
+            const stats = orch.stats || {};
+            document.getElementById('stats-total').textContent = stats.totalTools || 0;
+            document.getElementById('stats-reads').textContent = stats.reads || 0;
+            document.getElementById('stats-writes').textContent = stats.writes || 0;
+            document.getElementById('stats-edits').textContent = stats.edits || 0;
+            document.getElementById('stats-bash').textContent = stats.bash || 0;
+            document.getElementById('stats-glob').textContent = stats.glob || 0;
+            document.getElementById('stats-grep').textContent = stats.grep || 0;
+            document.getElementById('stats-task').textContent = stats.task || 0;
+            document.getElementById('stats-other').textContent = stats.other || 0;
+        }
+
+        function renderTasks(tasks) {
+            const container = document.getElementById('tasks-list');
+
+            if (tasks.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #6b7280;">No tasks yet. Orchestrator is in analysis phase.</p>';
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => `
+                <div class="worker-card">
+                    <div class="worker-header">
+                        <div class="worker-title">${task.title}</div>
+                        <span class="worker-status" style="background: #e5e7eb; color: #374151;">Priority: ${task.priority || '-'}</span>
+                    </div>
+                    <div class="worker-description">${task.description}</div>
+                    ${task.scope ? `<div style="font-size: 12px; color: #9ca3af;">Scope: ${task.scope.join(', ')}</div>` : ''}
+                    ${task.dependencies && task.dependencies.length > 0 ?
+                        `<div style="font-size: 12px; color: #9ca3af;">Dependencies: ${task.dependencies.join(', ')}</div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function renderWorkers(workers) {
+            const container = document.getElementById('workers-list');
+
+            if (workers.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #6b7280;">No workers spawned yet.</p>';
+                return;
+            }
+
+            container.innerHTML = workers.map(worker => `
+                <div class="worker-card ${worker.status}">
+                    <div class="worker-header">
+                        <div class="worker-title">Task: ${worker.taskId}</div>
+                        <span class="worker-status" style="background: ${getStatusColor(worker.status)}; color: white;">
+                            ${worker.status}
+                        </span>
+                    </div>
+                    <div style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
+                        Session: <code>${worker.sessionId}</code>
+                    </div>
+                    ${worker.progress ? `
+                        <div class="worker-progress">
+                            Progress: ${worker.progress}%
+                            ${worker.currentAction ? `<br>Current: ${worker.currentAction}` : ''}
+                        </div>
+                    ` : ''}
+                    ${worker.toolStats ? `
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 8px;">
+                            Tools: ${JSON.stringify(worker.toolStats)}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function getStatusColor(status) {
+            const colors = {
+                'completed': '#10b981',
+                'running': '#3b82f6',
+                'spawning': '#8b5cf6',
+                'failed': '#ef4444',
+                'timeout': '#f59e0b',
+                'cancelled': '#6b7280',
+                'pending': '#9ca3af'
+            };
+            return colors[status] || '#6b7280';
+        }
+
+        // Chat functionality
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const btn = document.getElementById('btn-send');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // Disable input while sending
+            input.disabled = true;
+            btn.disabled = true;
+            btn.textContent = 'Sending...';
+            btn.classList.add('sending');
+
+            try {
+                const result = await apiRequest(`/api/orchestrator/${orchestratorId}/message`, {
+                    method: 'POST',
+                    body: JSON.stringify({ message })
+                });
+
+                if (result.success) {
+                    input.value = '';
+                    // Refresh to see the new message
+                    loadOrchestrator();
+                } else {
+                    alert('Failed to send message: ' + (result.message || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Failed to send message:', error);
+                alert('Failed to send message: ' + error.message);
+            } finally {
+                input.disabled = false;
+                btn.disabled = false;
+                btn.textContent = 'Send';
+                btn.classList.remove('sending');
+                input.focus();
+            }
+        }
+
+        function handleChatKeydown(event) {
+            // Ctrl+Enter or Cmd+Enter to send
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Initialize the page
+        async function initialize() {
+            if (!orchestratorId) {
+                return; // Error already shown
+            }
+
+            // Check authentication
+            const authOk = await checkAuthStatus();
+
+            if (!authOk) {
+                // Redirect to main page for PIN authentication
+                redirectToLogin();
+                return;
+            }
+
+            // Load orchestrator data
+            loadOrchestrator();
+
+            // Start auto-refresh every 5 seconds
+            refreshInterval = setInterval(loadOrchestrator, 5000);
+        }
+
+        // Start initialization
+        initialize();
+    </script>
+</body>
+</html>

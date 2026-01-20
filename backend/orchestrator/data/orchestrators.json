@@ -1,0 +1,694 @@
+[
+  {
+    "id": "orch_e1a8b619-c0c",
+    "templateId": "documentation",
+    "template": {
+      "$schema": "./schema.json",
+      "id": "documentation",
+      "name": "Documentation Generator",
+      "description": "Generate comprehensive documentation for a project. Splits documentation work across multiple workers by component type.",
+      "version": "1.0.0",
+      "author": "system",
+      "tags": [
+        "documentation",
+        "analysis",
+        "markdown",
+        "api-docs"
+      ],
+      "config": {
+        "maxWorkers": 8,
+        "workerTimeout": 600000,
+        "autoSpawn": true,
+        "parallelExecution": true,
+        "retryOnError": true,
+        "maxRetries": 2,
+        "sessionPrefix": "__orch_",
+        "pollInterval": 2000,
+        "hideWorkersFromList": true
+      },
+      "phases": {
+        "analysis": {
+          "enabled": true,
+          "timeout": 180000,
+          "tools": {
+            "required": [
+              "Task"
+            ],
+            "subagentType": "Explore"
+          },
+          "validation": {
+            "requiredFields": [
+              "summary",
+              "recommended_splits",
+              "components"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "enabled": true,
+          "timeout": 180000,
+          "validation": {
+            "minTasks": 1,
+            "maxTasks": 50,
+            "requireDependencies": false,
+            "requireScope": true
+          }
+        },
+        "workerExecution": {
+          "progressReporting": true,
+          "progressInterval": 30000,
+          "completionMarkers": [
+            "<<<TASK_COMPLETE>>>",
+            "<<<TASK_FAILED>>>"
+          ]
+        },
+        "aggregation": {
+          "enabled": true,
+          "timeout": 300000,
+          "mergeStrategy": "concatenate",
+          "conflictResolution": "ask"
+        },
+        "verification": {
+          "enabled": true,
+          "timeout": 300000,
+          "autoFix": false
+        }
+      },
+      "prompts": {
+        "responseFormat": {
+          "delimiterStart": "<<<ORCHESTRATOR_RESPONSE>>>",
+          "delimiterEnd": "<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "type": "json"
+        },
+        "analysis": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - ANALYSIS PHASE\n\nYou are the orchestrator for a documentation generation task. Your role is to analyze the project and plan how to split the documentation work across multiple workers.\n\n## Your Goals:\n1. Explore the codebase structure using the Task tool (subagent_type=\"Explore\")\n2. Identify all documentable components:\n   - APIs (REST, GraphQL, WebSocket)\n   - Modules and classes\n   - Configuration files\n   - Database schemas\n   - Architecture patterns\n3. Assess documentation complexity for each component\n4. Recommend optimal task splitting\n\n## Documentation Settings:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## CRITICAL - Response Format:\n\nAfter your analysis, you MUST respond using this EXACT format. The delimiters are parsed programmatically - do not modify them.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"analysis\",\n  \"data\": {\n    \"summary\": \"Brief project overview and documentation needs\",\n    \"key_files\": [\"path/to/file1.js\", \"path/to/file2.js\"],\n    \"components\": [\n      {\n        \"type\": \"api\",\n        \"name\": \"REST API\",\n        \"files\": [\"src/routes/api.js\"],\n        \"complexity\": \"high\",\n        \"priority\": 1\n      },\n      {\n        \"type\": \"module\",\n        \"name\": \"Authentication\",\n        \"files\": [\"src/auth/index.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      }\n    ],\n    \"recommended_splits\": 4,\n    \"estimated_complexity\": \"medium\",\n    \"notes\": \"Any important observations about documentation needs\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Example Full Response:\n\nI've explored the codebase to understand its documentation needs.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"analysis\",\n  \"data\": {\n    \"summary\": \"A Node.js backend with Express REST API, WebSocket support, and MongoDB models. Documentation should cover API endpoints, data models, and configuration.\",\n    \"key_files\": [\"src/server.js\", \"src/routes/api.js\", \"src/models/user.js\", \"src/config/index.js\"],\n    \"components\": [\n      {\n        \"type\": \"api\",\n        \"name\": \"REST Endpoints\",\n        \"files\": [\"src/routes/api.js\", \"src/routes/auth.js\"],\n        \"complexity\": \"high\",\n        \"priority\": 1\n      },\n      {\n        \"type\": \"websocket\",\n        \"name\": \"WebSocket Events\",\n        \"files\": [\"src/websocket/handler.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      },\n      {\n        \"type\": \"models\",\n        \"name\": \"Database Models\",\n        \"files\": [\"src/models/user.js\", \"src/models/session.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      },\n      {\n        \"type\": \"config\",\n        \"name\": \"Configuration\",\n        \"files\": [\"src/config/index.js\", \".env.example\"],\n        \"complexity\": \"low\",\n        \"priority\": 3\n      }\n    ],\n    \"recommended_splits\": 4,\n    \"estimated_complexity\": \"medium\",\n    \"notes\": \"The REST API has 15+ endpoints that need detailed documentation. Consider grouping by resource type.\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nWait for further instructions - do not proceed to implementation.\n\n{CUSTOM_INSTRUCTIONS}",
+          "user": "Analyze this project for documentation generation:\n\n{USER_REQUEST}\n\nWorking Directory: {CWD}\nProject Name: {PROJECT_NAME}\n\nDocumentation Preferences:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}",
+          "format": {
+            "phase": "analysis",
+            "requiredFields": [
+              "summary",
+              "recommended_splits",
+              "components"
+            ],
+            "optionalFields": [
+              "key_files",
+              "notes",
+              "warnings",
+              "estimated_complexity"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - TASK PLANNING PHASE\n\nBased on your analysis, create a task list for the documentation workers. Each worker will document a specific component or section.\n\n## Documentation Settings (apply to all tasks):\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## Task Planning Guidelines:\n- One task per major component type\n- Larger components may need multiple tasks\n- Consider dependencies (e.g., API docs may reference model docs)\n- Include a final \"integration\" task if needed\n\n## Task Types for Documentation:\n- api-docs: Document REST/GraphQL endpoints\n- websocket-docs: Document WebSocket events\n- model-docs: Document database models/schemas\n- config-docs: Document configuration options\n- module-docs: Document internal modules/classes\n- readme: Generate README or overview\n- integration: Combine and cross-reference docs\n\n## CRITICAL - Response Format:\n\nYou MUST use this exact format. The delimiters are parsed programmatically.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"task_list\",\n  \"data\": {\n    \"total_tasks\": 5,\n    \"tasks\": [\n      {\n        \"id\": \"task_001\",\n        \"title\": \"REST API Documentation\",\n        \"description\": \"Document all REST API endpoints including request/response formats, authentication requirements, and example usage\",\n        \"scope\": [\"src/routes/api.js\", \"src/routes/auth.js\"],\n        \"priority\": 1,\n        \"dependencies\": [],\n        \"type\": \"api-docs\"\n      },\n      {\n        \"id\": \"task_002\",\n        \"title\": \"Data Models Documentation\",\n        \"description\": \"Document all database models, their fields, relationships, and validation rules\",\n        \"scope\": [\"src/models/\"],\n        \"priority\": 1,\n        \"dependencies\": [],\n        \"type\": \"model-docs\"\n      }\n    ],\n    \"parallelizable_groups\": [[\"task_001\", \"task_002\", \"task_003\"], [\"task_004\", \"task_005\"]],\n    \"execution_order\": [\"task_001\", \"task_002\", \"task_003\", \"task_004\", \"task_005\"]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Create documentation tasks based on your analysis:\n\nAnalysis Summary: {ANALYSIS_SUMMARY}\nComponents Found: {COMPONENTS}\n\nOriginal Request: {USER_REQUEST}\nKey Files: {KEY_FILES}",
+          "format": {
+            "phase": "task_list",
+            "requiredFields": [
+              "tasks"
+            ],
+            "optionalFields": [
+              "total_tasks",
+              "parallelizable_groups",
+              "execution_order"
+            ],
+            "taskSchema": {
+              "required": [
+                "id",
+                "title",
+                "description"
+              ],
+              "optional": [
+                "scope",
+                "priority",
+                "dependencies",
+                "type",
+                "estimated_tokens"
+              ]
+            }
+          }
+        },
+        "worker": {
+          "system": "# DOCUMENTATION WORKER - TASK EXECUTION\n\nYou are a documentation worker agent. Your job is to write high-quality documentation for your assigned component.\n\n## Your Assignment:\n- Task ID: {TASK_ID}\n- Component: {TASK_TITLE}\n- Description: {TASK_DESCRIPTION}\n- Files to Document: {TASK_SCOPE}\n\n## Documentation Requirements:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## Documentation Guidelines:\n\n### For API Endpoints:\n- Document each endpoint with: method, path, description\n- List all parameters (path, query, body) with types\n- Show request/response examples\n- Note authentication requirements\n- Document error responses\n\n### For Data Models:\n- List all fields with types and descriptions\n- Document relationships between models\n- Include validation rules\n- Show example data\n\n### For Modules/Classes:\n- Describe the purpose and responsibility\n- Document public methods/functions\n- Show usage examples\n- Note dependencies\n\n### For Configuration:\n- List all config options with descriptions\n- Document default values\n- Show environment variable mappings\n- Include example configurations\n\n## Important Rules:\n1. Focus ONLY on files in your scope\n2. Read the files thoroughly before writing\n3. Do NOT include implementation code unless examples are needed\n4. Use clear, consistent formatting\n5. Report progress periodically\n\n## Progress Report (use periodically):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"progress\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"in_progress\",\n    \"progress_percent\": 50,\n    \"current_action\": \"Documenting /api/users endpoints...\",\n    \"files_processed\": 2,\n    \"files_total\": 4\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Completion Report (when finished):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"success\",\n    \"summary\": \"Documented 15 REST endpoints with full request/response examples\",\n    \"output_files\": [\"docs/api-reference.md\"],\n    \"sections_created\": [\"Authentication\", \"Users\", \"Sessions\", \"Settings\"],\n    \"metrics\": {\n      \"endpoints_documented\": 15,\n      \"examples_created\": 12\n    }\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Error Report (if unable to complete):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"failed\",\n    \"error\": \"Could not parse file - syntax errors in source\",\n    \"partial_progress\": \"Completed 3 of 5 files before error\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nRemember: Use the <<<ORCHESTRATOR_RESPONSE>>> delimiters exactly as shown - they are required for the orchestration system.",
+          "user": "Write documentation for your assigned component.\n\nOriginal request (for context): {ORIGINAL_REQUEST}\n\nDocumentation Settings:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\nBegin your documentation work now. Report progress and completion using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "progressPhase": "progress",
+            "completionPhase": "completion"
+          }
+        },
+        "aggregation": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - AGGREGATION PHASE\n\nAll documentation workers have completed their tasks. Now you must merge their outputs into a cohesive documentation set.\n\n## Your Responsibilities:\n1. Review all worker documentation outputs\n2. Check for consistency in style and formatting\n3. Ensure cross-references are correct\n4. Create a table of contents or index if needed\n5. Identify any gaps in documentation\n6. Resolve any conflicts or duplications\n\n## Documentation Settings:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n\n## Things to Check:\n- Are all documented items using consistent naming?\n- Are cross-references pointing to correct sections?\n- Is the documentation structure logical?\n- Are there any overlapping or duplicate sections?\n- Is anything mentioned but not documented?\n\n## CRITICAL - Response Format:\n\nAfter merging and reviewing, use this EXACT format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"success\",\n    \"summary\": \"Successfully merged documentation from 4 workers into a complete documentation set\",\n    \"output_files\": [\"docs/README.md\", \"docs/api-reference.md\", \"docs/models.md\", \"docs/configuration.md\"],\n    \"table_of_contents\": [\n      \"1. Overview\",\n      \"2. API Reference\",\n      \"3. Data Models\",\n      \"4. Configuration\"\n    ],\n    \"conflicts\": [],\n    \"gaps_identified\": [\"WebSocket events mentioned but not fully documented\"],\n    \"merged_output\": \"Brief description of final documentation structure\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## If Conflicts Found:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"needs_input\",\n    \"summary\": \"Documentation merged but found naming conflicts\",\n    \"conflicts\": [\n      {\n        \"type\": \"naming_conflict\",\n        \"description\": \"Worker 1 calls it 'sessionId' but Worker 2 calls it 'session_id'\",\n        \"options\": [\"Use camelCase (sessionId)\", \"Use snake_case (session_id)\"],\n        \"resolution\": \"needs_user_input\"\n      }\n    ]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Merge the following documentation outputs from workers:\n\n{WORKER_OUTPUTS}\n\nOriginal request: {ORIGINAL_REQUEST}\n\nDocumentation Settings:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n\nMerge these into a cohesive documentation set. Use the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "phase": "aggregation",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "conflicts",
+              "output_files",
+              "table_of_contents",
+              "gaps_identified",
+              "merged_output"
+            ]
+          }
+        },
+        "verification": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - VERIFICATION PHASE\n\nThe documentation has been merged. Now verify it is complete and correct.\n\n## Verification Checklist:\n1. Does the documentation cover all components from the original request?\n2. Are all cross-references valid?\n3. Is the formatting consistent throughout?\n4. Are all examples syntactically correct?\n5. Is the documentation structure logical and navigable?\n6. Are there any TODO or placeholder sections?\n7. Does the documentation match the actual code?\n\n## CRITICAL - Response Format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"verification\",\n  \"data\": {\n    \"status\": \"passed\",\n    \"summary\": \"Documentation verified - all sections complete and accurate\",\n    \"checks_performed\": [\n      \"Cross-reference validation\",\n      \"Code example syntax check\",\n      \"Completeness check against codebase\"\n    ],\n    \"issues\": []\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## If Issues Found:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"verification\",\n  \"data\": {\n    \"status\": \"failed\",\n    \"summary\": \"Found 2 issues requiring attention\",\n    \"issues\": [\n      {\n        \"severity\": \"error\",\n        \"description\": \"API endpoint /api/users/delete not documented\",\n        \"location\": \"docs/api-reference.md\",\n        \"suggested_fix\": \"Add documentation for DELETE /api/users/:id endpoint\"\n      },\n      {\n        \"severity\": \"warning\",\n        \"description\": \"Example code has deprecated syntax\",\n        \"location\": \"docs/api-reference.md:45\",\n        \"suggested_fix\": \"Update to use async/await instead of callbacks\"\n      }\n    ]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Verify the merged documentation:\n\n{MERGED_OUTPUT}\n\nOriginal request: {ORIGINAL_REQUEST}\n\nCheck for completeness, accuracy, and formatting. Report using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "phase": "verification",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "checks_performed",
+              "issues",
+              "auto_fixed"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "OUTPUT_FORMAT": "markdown",
+        "LANGUAGE": "english",
+        "VERBOSITY": "detailed",
+        "INCLUDE_EXAMPLES": true
+      },
+      "hooks": {
+        "onAnalysisComplete": null,
+        "onTasksGenerated": null,
+        "onWorkerStart": null,
+        "onWorkerComplete": null,
+        "onAllWorkersComplete": null,
+        "onError": null
+      },
+      "ui": {
+        "color": "#4A90D9",
+        "icon": "book",
+        "showWorkerDetails": true,
+        "showTokenEstimate": true,
+        "showProgressBar": true,
+        "progressStyle": "detailed",
+        "workerColumns": [
+          "status",
+          "progress",
+          "files",
+          "time"
+        ]
+      },
+      "_isSystem": true,
+      "_filePath": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote\\backend\\orchestrator\\templates\\_default.json",
+      "icon": "book",
+      "extends": "_default"
+    },
+    "mainSessionId": "local_5d2f25f7-961a-4560-9692-d157c107afc6",
+    "cwd": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote",
+    "userRequest": "DocClaude_[feature].md creation\nexplore codebase and create verbose documentation for every aspect of the code\neach doc as to be in 2 part [verbose explain of the functionnement] [var/input/output important of code]\nMax 25k token per file, u can check it by try to full read it, if u can ure good\nIf u see some TODO in code, dont do it but mention it to your supervisor in final task output\nAll documentation output has to be in \\ClaudeCode_Remote\\DocClaude",
+    "status": "analyzing",
+    "currentPhase": "analysis",
+    "analysis": null,
+    "tasks": [],
+    "parallelGroups": [],
+    "workers": {},
+    "stats": {
+      "totalTools": 0,
+      "reads": 0,
+      "writes": 0,
+      "edits": 0,
+      "bash": 0,
+      "glob": 0,
+      "grep": 0,
+      "task": 0,
+      "other": 0
+    },
+    "customVariables": {},
+    "createdAt": "2026-01-18T16:53:50.956Z",
+    "updatedAt": "2026-01-18T16:53:52.556Z",
+    "startedAt": "2026-01-18T16:53:52.556Z",
+    "completedAt": null,
+    "errors": []
+  },
+  {
+    "id": "orch_5b850c43-ad8",
+    "templateId": "documentation",
+    "template": {
+      "$schema": "./schema.json",
+      "id": "documentation",
+      "name": "Documentation Generator",
+      "description": "Generate comprehensive documentation for a project. Splits documentation work across multiple workers by component type.",
+      "version": "1.0.0",
+      "author": "system",
+      "tags": [
+        "documentation",
+        "analysis",
+        "markdown",
+        "api-docs"
+      ],
+      "config": {
+        "maxWorkers": 8,
+        "workerTimeout": 600000,
+        "autoSpawn": true,
+        "parallelExecution": true,
+        "retryOnError": true,
+        "maxRetries": 2,
+        "sessionPrefix": "__orch_",
+        "pollInterval": 2000,
+        "hideWorkersFromList": true
+      },
+      "phases": {
+        "analysis": {
+          "enabled": true,
+          "timeout": 180000,
+          "tools": {
+            "required": [
+              "Task"
+            ],
+            "subagentType": "Explore"
+          },
+          "validation": {
+            "requiredFields": [
+              "summary",
+              "recommended_splits",
+              "components"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "enabled": true,
+          "timeout": 180000,
+          "validation": {
+            "minTasks": 1,
+            "maxTasks": 50,
+            "requireDependencies": false,
+            "requireScope": true
+          }
+        },
+        "workerExecution": {
+          "progressReporting": true,
+          "progressInterval": 30000,
+          "completionMarkers": [
+            "<<<TASK_COMPLETE>>>",
+            "<<<TASK_FAILED>>>"
+          ]
+        },
+        "aggregation": {
+          "enabled": true,
+          "timeout": 300000,
+          "mergeStrategy": "concatenate",
+          "conflictResolution": "ask"
+        },
+        "verification": {
+          "enabled": true,
+          "timeout": 300000,
+          "autoFix": false
+        }
+      },
+      "prompts": {
+        "responseFormat": {
+          "delimiterStart": "<<<ORCHESTRATOR_RESPONSE>>>",
+          "delimiterEnd": "<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "type": "json"
+        },
+        "analysis": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - ANALYSIS PHASE\n\n## CRITICAL - HOW ORCHESTRATOR MODE WORKS\n\nIn Orchestrator Mode, you communicate with the orchestration system via structured JSON responses between <<<ORCHESTRATOR_RESPONSE>>> delimiters. You do NOT spawn Task() agents yourself for the actual documentation work - the orchestration system will spawn worker sessions based on your task list.\n\nThe flow is:\n1. YOU analyze and return a JSON response\n2. The SERVER parses your response and advances to the next phase\n3. The SERVER spawns workers based on your task list\n\nDO NOT use Task() to spawn agents for documentation writing - that bypasses the orchestration system!\n\n---\n\nYou are the orchestrator for a documentation generation task. Your role is to analyze the project and plan how to split the documentation work across multiple workers.\n\n## Your Goals:\n1. Explore the codebase structure using the Task tool (subagent_type=\"Explore\") - this is OK for exploration\n2. Identify all documentable components:\n   - APIs (REST, GraphQL, WebSocket)\n   - Modules and classes\n   - Configuration files\n   - Database schemas\n   - Architecture patterns\n3. Assess documentation complexity for each component\n4. Recommend optimal task splitting\n\n## Documentation Settings:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## CRITICAL - Response Format:\n\nAfter your analysis, you MUST respond using this EXACT format. The delimiters are parsed programmatically - do not modify them.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"analysis\",\n  \"data\": {\n    \"summary\": \"Brief project overview and documentation needs\",\n    \"key_files\": [\"path/to/file1.js\", \"path/to/file2.js\"],\n    \"components\": [\n      {\n        \"type\": \"api\",\n        \"name\": \"REST API\",\n        \"files\": [\"src/routes/api.js\"],\n        \"complexity\": \"high\",\n        \"priority\": 1\n      },\n      {\n        \"type\": \"module\",\n        \"name\": \"Authentication\",\n        \"files\": [\"src/auth/index.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      }\n    ],\n    \"recommended_splits\": 4,\n    \"estimated_complexity\": \"medium\",\n    \"notes\": \"Any important observations about documentation needs\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Example Full Response:\n\nI've explored the codebase to understand its documentation needs.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"analysis\",\n  \"data\": {\n    \"summary\": \"A Node.js backend with Express REST API, WebSocket support, and MongoDB models. Documentation should cover API endpoints, data models, and configuration.\",\n    \"key_files\": [\"src/server.js\", \"src/routes/api.js\", \"src/models/user.js\", \"src/config/index.js\"],\n    \"components\": [\n      {\n        \"type\": \"api\",\n        \"name\": \"REST Endpoints\",\n        \"files\": [\"src/routes/api.js\", \"src/routes/auth.js\"],\n        \"complexity\": \"high\",\n        \"priority\": 1\n      },\n      {\n        \"type\": \"websocket\",\n        \"name\": \"WebSocket Events\",\n        \"files\": [\"src/websocket/handler.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      },\n      {\n        \"type\": \"models\",\n        \"name\": \"Database Models\",\n        \"files\": [\"src/models/user.js\", \"src/models/session.js\"],\n        \"complexity\": \"medium\",\n        \"priority\": 2\n      },\n      {\n        \"type\": \"config\",\n        \"name\": \"Configuration\",\n        \"files\": [\"src/config/index.js\", \".env.example\"],\n        \"complexity\": \"low\",\n        \"priority\": 3\n      }\n    ],\n    \"recommended_splits\": 4,\n    \"estimated_complexity\": \"medium\",\n    \"notes\": \"The REST API has 15+ endpoints that need detailed documentation. Consider grouping by resource type.\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nWait for further instructions - do not proceed to implementation.\n\n{CUSTOM_INSTRUCTIONS}",
+          "user": "Analyze this project for documentation generation:\n\n{USER_REQUEST}\n\nWorking Directory: {CWD}\nProject Name: {PROJECT_NAME}\n\nDocumentation Preferences:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}",
+          "format": {
+            "phase": "analysis",
+            "requiredFields": [
+              "summary",
+              "recommended_splits",
+              "components"
+            ],
+            "optionalFields": [
+              "key_files",
+              "notes",
+              "warnings",
+              "estimated_complexity"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - TASK PLANNING PHASE\n\n## CRITICAL - DO NOT SPAWN AGENTS YOURSELF\n\nIn this phase, you MUST NOT use the Task tool to spawn agents. Instead, return a structured JSON task list using the <<<ORCHESTRATOR_RESPONSE>>> format.\n\nThe orchestration system will automatically spawn separate worker sessions for each task in your list. If you spawn Task() agents yourself, you bypass the orchestration system and workers will NOT be tracked properly.\n\nYour job: Return a JSON task list describing what documentation to create.\nThe server's job: Spawn workers for each task.\n\n---\n\nBased on your analysis, create a task list for the documentation workers. Each worker will document a specific component or section.\n\n## Documentation Settings (apply to all tasks):\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## Task Planning Guidelines:\n- One task per major component type\n- Larger components may need multiple tasks\n- Consider dependencies (e.g., API docs may reference model docs)\n- Include a final \"integration\" task if needed\n\n## Task Types for Documentation:\n- api-docs: Document REST/GraphQL endpoints\n- websocket-docs: Document WebSocket events\n- model-docs: Document database models/schemas\n- config-docs: Document configuration options\n- module-docs: Document internal modules/classes\n- readme: Generate README or overview\n- integration: Combine and cross-reference docs\n\n## CRITICAL - Response Format:\n\nYou MUST use this exact format. The delimiters are parsed programmatically.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"task_list\",\n  \"data\": {\n    \"total_tasks\": 5,\n    \"tasks\": [\n      {\n        \"id\": \"task_001\",\n        \"title\": \"REST API Documentation\",\n        \"description\": \"Document all REST API endpoints including request/response formats, authentication requirements, and example usage\",\n        \"scope\": [\"src/routes/api.js\", \"src/routes/auth.js\"],\n        \"priority\": 1,\n        \"dependencies\": [],\n        \"type\": \"api-docs\"\n      },\n      {\n        \"id\": \"task_002\",\n        \"title\": \"Data Models Documentation\",\n        \"description\": \"Document all database models, their fields, relationships, and validation rules\",\n        \"scope\": [\"src/models/\"],\n        \"priority\": 1,\n        \"dependencies\": [],\n        \"type\": \"model-docs\"\n      }\n    ],\n    \"parallelizable_groups\": [[\"task_001\", \"task_002\", \"task_003\"], [\"task_004\", \"task_005\"]],\n    \"execution_order\": [\"task_001\", \"task_002\", \"task_003\", \"task_004\", \"task_005\"]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Create documentation tasks based on your analysis:\n\nAnalysis Summary: {ANALYSIS_SUMMARY}\nComponents Found: {COMPONENTS}\n\nOriginal Request: {USER_REQUEST}\nKey Files: {KEY_FILES}",
+          "format": {
+            "phase": "task_list",
+            "requiredFields": [
+              "tasks"
+            ],
+            "optionalFields": [
+              "total_tasks",
+              "parallelizable_groups",
+              "execution_order"
+            ],
+            "taskSchema": {
+              "required": [
+                "id",
+                "title",
+                "description"
+              ],
+              "optional": [
+                "scope",
+                "priority",
+                "dependencies",
+                "type",
+                "estimated_tokens"
+              ]
+            }
+          }
+        },
+        "worker": {
+          "system": "# DOCUMENTATION WORKER - TASK EXECUTION\n\nYou are a documentation worker agent. Your job is to write high-quality documentation for your assigned component.\n\n## Your Assignment:\n- Task ID: {TASK_ID}\n- Component: {TASK_TITLE}\n- Description: {TASK_DESCRIPTION}\n- Files to Document: {TASK_SCOPE}\n\n## Documentation Requirements:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n## Documentation Guidelines:\n\n### For API Endpoints:\n- Document each endpoint with: method, path, description\n- List all parameters (path, query, body) with types\n- Show request/response examples\n- Note authentication requirements\n- Document error responses\n\n### For Data Models:\n- List all fields with types and descriptions\n- Document relationships between models\n- Include validation rules\n- Show example data\n\n### For Modules/Classes:\n- Describe the purpose and responsibility\n- Document public methods/functions\n- Show usage examples\n- Note dependencies\n\n### For Configuration:\n- List all config options with descriptions\n- Document default values\n- Show environment variable mappings\n- Include example configurations\n\n## Important Rules:\n1. Focus ONLY on files in your scope\n2. Read the files thoroughly before writing\n3. Do NOT include implementation code unless examples are needed\n4. Use clear, consistent formatting\n5. Report progress periodically\n\n## Progress Report (use periodically):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"progress\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"in_progress\",\n    \"progress_percent\": 50,\n    \"current_action\": \"Documenting /api/users endpoints...\",\n    \"files_processed\": 2,\n    \"files_total\": 4\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Completion Report (when finished):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"success\",\n    \"summary\": \"Documented 15 REST endpoints with full request/response examples\",\n    \"output_files\": [\"docs/api-reference.md\"],\n    \"sections_created\": [\"Authentication\", \"Users\", \"Sessions\", \"Settings\"],\n    \"metrics\": {\n      \"endpoints_documented\": 15,\n      \"examples_created\": 12\n    }\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Error Report (if unable to complete):\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"failed\",\n    \"error\": \"Could not parse file - syntax errors in source\",\n    \"partial_progress\": \"Completed 3 of 5 files before error\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nRemember: Use the <<<ORCHESTRATOR_RESPONSE>>> delimiters exactly as shown - they are required for the orchestration system.",
+          "user": "Write documentation for your assigned component.\n\nOriginal request (for context): {ORIGINAL_REQUEST}\n\nDocumentation Settings:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\nBegin your documentation work now. Report progress and completion using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "progressPhase": "progress",
+            "completionPhase": "completion"
+          }
+        },
+        "aggregation": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - AGGREGATION PHASE\n\nAll documentation workers have completed their tasks. Now you must merge their outputs into a cohesive documentation set.\n\n## Your Responsibilities:\n1. Review all worker documentation outputs\n2. Check for consistency in style and formatting\n3. Ensure cross-references are correct\n4. Create a table of contents or index if needed\n5. Identify any gaps in documentation\n6. Resolve any conflicts or duplications\n\n## Documentation Settings:\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity Level: {VERBOSITY}\n\n## Things to Check:\n- Are all documented items using consistent naming?\n- Are cross-references pointing to correct sections?\n- Is the documentation structure logical?\n- Are there any overlapping or duplicate sections?\n- Is anything mentioned but not documented?\n\n## CRITICAL - Response Format:\n\nAfter merging and reviewing, use this EXACT format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"success\",\n    \"summary\": \"Successfully merged documentation from 4 workers into a complete documentation set\",\n    \"output_files\": [\"docs/README.md\", \"docs/api-reference.md\", \"docs/models.md\", \"docs/configuration.md\"],\n    \"table_of_contents\": [\n      \"1. Overview\",\n      \"2. API Reference\",\n      \"3. Data Models\",\n      \"4. Configuration\"\n    ],\n    \"conflicts\": [],\n    \"gaps_identified\": [\"WebSocket events mentioned but not fully documented\"],\n    \"merged_output\": \"Brief description of final documentation structure\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## If Conflicts Found:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"needs_input\",\n    \"summary\": \"Documentation merged but found naming conflicts\",\n    \"conflicts\": [\n      {\n        \"type\": \"naming_conflict\",\n        \"description\": \"Worker 1 calls it 'sessionId' but Worker 2 calls it 'session_id'\",\n        \"options\": [\"Use camelCase (sessionId)\", \"Use snake_case (session_id)\"],\n        \"resolution\": \"needs_user_input\"\n      }\n    ]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Merge the following documentation outputs from workers:\n\n{WORKER_OUTPUTS}\n\nOriginal request: {ORIGINAL_REQUEST}\n\nDocumentation Settings:\n- Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n\nMerge these into a cohesive documentation set. Use the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "phase": "aggregation",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "conflicts",
+              "output_files",
+              "table_of_contents",
+              "gaps_identified",
+              "merged_output"
+            ]
+          }
+        },
+        "verification": {
+          "system": "# DOCUMENTATION ORCHESTRATOR - VERIFICATION PHASE\n\nThe documentation has been merged. Now verify it is complete and correct.\n\n## Verification Checklist:\n1. Does the documentation cover all components from the original request?\n2. Are all cross-references valid?\n3. Is the formatting consistent throughout?\n4. Are all examples syntactically correct?\n5. Is the documentation structure logical and navigable?\n6. Are there any TODO or placeholder sections?\n7. Does the documentation match the actual code?\n\n## CRITICAL - Response Format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"verification\",\n  \"data\": {\n    \"status\": \"passed\",\n    \"summary\": \"Documentation verified - all sections complete and accurate\",\n    \"checks_performed\": [\n      \"Cross-reference validation\",\n      \"Code example syntax check\",\n      \"Completeness check against codebase\"\n    ],\n    \"issues\": []\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## If Issues Found:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"verification\",\n  \"data\": {\n    \"status\": \"failed\",\n    \"summary\": \"Found 2 issues requiring attention\",\n    \"issues\": [\n      {\n        \"severity\": \"error\",\n        \"description\": \"API endpoint /api/users/delete not documented\",\n        \"location\": \"docs/api-reference.md\",\n        \"suggested_fix\": \"Add documentation for DELETE /api/users/:id endpoint\"\n      },\n      {\n        \"severity\": \"warning\",\n        \"description\": \"Example code has deprecated syntax\",\n        \"location\": \"docs/api-reference.md:45\",\n        \"suggested_fix\": \"Update to use async/await instead of callbacks\"\n      }\n    ]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Verify the merged documentation:\n\n{MERGED_OUTPUT}\n\nOriginal request: {ORIGINAL_REQUEST}\n\nCheck for completeness, accuracy, and formatting. Report using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "phase": "verification",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "checks_performed",
+              "issues",
+              "auto_fixed"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "OUTPUT_FORMAT": "markdown",
+        "LANGUAGE": "english",
+        "VERBOSITY": "detailed",
+        "INCLUDE_EXAMPLES": true
+      },
+      "hooks": {
+        "onAnalysisComplete": null,
+        "onTasksGenerated": null,
+        "onWorkerStart": null,
+        "onWorkerComplete": null,
+        "onAllWorkersComplete": null,
+        "onError": null
+      },
+      "ui": {
+        "color": "#4A90D9",
+        "icon": "book",
+        "showWorkerDetails": true,
+        "showTokenEstimate": true,
+        "showProgressBar": true,
+        "progressStyle": "detailed",
+        "workerColumns": [
+          "status",
+          "progress",
+          "files",
+          "time"
+        ]
+      },
+      "_isSystem": true,
+      "_filePath": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote\\backend\\orchestrator\\templates\\_default.json",
+      "icon": "book",
+      "extends": "_default"
+    },
+    "mainSessionId": "local_cd8c266e-8e08-4c87-8e04-0e60aa7e2b11",
+    "cwd": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote",
+    "userRequest": "DocClaude_[feature].md creation\nexplore codebase and create verbose documentation for every aspect of the code\neach doc as to be in 2 part [verbose explain of the functionnement] [var/input/output important of code]\nMax 25k token per file, u can check it by try to full read it, if u can ure good\nIf u see some TODO in code, dont do it but mention it to your supervisor in final task output <\ngenere doc at \\ClaudeCode_Remote\\DocClaude",
+    "status": "analyzing",
+    "currentPhase": "analysis",
+    "analysis": null,
+    "tasks": [],
+    "parallelGroups": [],
+    "workers": {},
+    "stats": {
+      "totalTools": 0,
+      "reads": 0,
+      "writes": 0,
+      "edits": 0,
+      "bash": 0,
+      "glob": 0,
+      "grep": 0,
+      "task": 0,
+      "other": 0
+    },
+    "customVariables": {},
+    "createdAt": "2026-01-18T17:18:31.888Z",
+    "updatedAt": "2026-01-18T17:18:33.513Z",
+    "startedAt": "2026-01-18T17:18:33.513Z",
+    "completedAt": null,
+    "errors": []
+  },
+  {
+    "id": "orch_cd31bf86-2cf",
+    "templateId": "subsession-doc",
+    "template": {
+      "$schema": "./schema.json",
+      "id": "subsession-doc",
+      "name": "Documentation (SubSession Mode)",
+      "description": "Generate documentation using the natural SubSession system. Claude spawns Task agents naturally and results are automatically returned to the main session.",
+      "version": "2.0.0",
+      "author": "system",
+      "tags": [
+        "documentation",
+        "subsession",
+        "natural-flow",
+        "task-agents"
+      ],
+      "config": {
+        "maxWorkers": 5,
+        "workerTimeout": 600000,
+        "autoSpawn": false,
+        "parallelExecution": true,
+        "retryOnError": true,
+        "maxRetries": 2,
+        "sessionPrefix": "__orch_",
+        "pollInterval": 2000,
+        "hideWorkersFromList": true,
+        "useSubSessions": true,
+        "inactivityThreshold": 60000,
+        "confirmationDelay": 30000
+      },
+      "phases": {
+        "analysis": {
+          "enabled": true,
+          "timeout": 300000,
+          "tools": {
+            "required": [
+              "Task"
+            ],
+            "subagentType": "Explore"
+          },
+          "validation": {
+            "requiredFields": [
+              "summary",
+              "recommended_splits"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "enabled": false,
+          "timeout": 180000,
+          "validation": {
+            "minTasks": 1,
+            "maxTasks": 50,
+            "requireDependencies": false,
+            "requireScope": true
+          }
+        },
+        "workerExecution": {
+          "progressReporting": true,
+          "progressInterval": 30000,
+          "completionMarkers": [
+            "<<<TASK_COMPLETE>>>",
+            "<<<TASK_FAILED>>>"
+          ],
+          "enabled": false
+        },
+        "aggregation": {
+          "enabled": false,
+          "timeout": 300000,
+          "mergeStrategy": "concatenate",
+          "conflictResolution": "ask"
+        },
+        "verification": {
+          "enabled": false,
+          "timeout": 180000,
+          "autoFix": false
+        }
+      },
+      "prompts": {
+        "responseFormat": {
+          "delimiterStart": "<<<ORCHESTRATOR_RESPONSE>>>",
+          "delimiterEnd": "<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "type": "json"
+        },
+        "analysis": {
+          "system": "# DOCUMENTATION TASK - SubSession Mode\n\nYou are tasked with generating documentation for this project. You have access to the Task tool to spawn specialized agents when needed.\n\n## How SubSession Mode Works\n\n1. **You naturally use Task agents**: When you need to explore, analyze, or document specific parts of the codebase, use the Task tool with appropriate subagent_types.\n\n2. **Results are automatically returned**: When a Task agent finishes its work (detected by 60+ seconds of inactivity), its last message is automatically sent back to you.\n\n3. **No special format required**: Just work naturally. You don't need to use any special delimiters or JSON formats.\n\n4. **Focus on quality**: Your goal is to produce excellent documentation, not to follow a specific protocol.\n\n## Available Task Subagent Types\n\n- **Explore**: For quickly exploring the codebase structure, finding files, searching code\n- **general-purpose**: For complex multi-step tasks, detailed analysis, writing documentation\n- **Plan**: For designing implementation strategies (useful for planning doc structure)\n\n## Documentation Guidelines\n\n### For API Documentation:\n- Document each endpoint: method, path, description\n- List parameters with types and descriptions\n- Show request/response examples\n- Note authentication requirements\n\n### For Module Documentation:\n- Describe purpose and responsibility\n- Document public API\n- Show usage examples\n- Note dependencies\n\n### For Configuration Documentation:\n- List all options with descriptions\n- Document defaults and environment variables\n- Include example configurations\n\n## Your Workflow\n\n1. **Explore first**: Use Task(Explore) to understand the codebase structure\n2. **Plan the documentation**: Decide what sections/files to document\n3. **Spawn workers as needed**: Use Task(general-purpose) for each major documentation section\n4. **Aggregate results**: Once all Task results return, combine them into final documentation\n5. **Write the output**: Create the final documentation files\n\n## Settings\n- Output Format: {OUTPUT_FORMAT}\n- Language: {LANGUAGE}\n- Verbosity: {VERBOSITY}\n- Include Examples: {INCLUDE_EXAMPLES}\n\n{CUSTOM_INSTRUCTIONS}\n\n## Important Notes\n\n- Results from Task agents will be injected into this conversation with the prefix **[Resultat de sous-tache]**\n- Wait for Task results before moving to the next step\n- You can run multiple Task agents in parallel by making multiple tool calls in one message\n- Keep track of what documentation you've assigned to each Task agent",
+          "user": "Please document this project:\n\n{USER_REQUEST}\n\nWorking Directory: {CWD}\nProject Name: {PROJECT_NAME}\n\nStart by exploring the codebase to understand its structure, then create comprehensive documentation.",
+          "format": {
+            "phase": "analysis",
+            "requiredFields": [
+              "summary",
+              "recommended_splits"
+            ],
+            "optionalFields": [
+              "key_files",
+              "notes",
+              "warnings",
+              "estimated_complexity",
+              "components"
+            ]
+          }
+        },
+        "taskPlanning": {
+          "system": "# ORCHESTRATOR MODE - TASK PLANNING PHASE\n\n## CRITICAL - DO NOT SPAWN AGENTS YOURSELF\n\nIn this phase, you MUST NOT use the Task tool to spawn agents. Instead, return a structured JSON task list using the <<<ORCHESTRATOR_RESPONSE>>> format.\n\nThe orchestration system will automatically spawn separate worker sessions for each task in your list. If you spawn Task() agents yourself, you bypass the orchestration system and workers will NOT be tracked properly.\n\nYour job: Return a JSON task list.\nThe server's job: Spawn workers for each task.\n\n---\n\nBased on your analysis, you must now create a detailed task list for parallel execution by worker agents.\n\n## Requirements for Tasks:\n- Each task should be independently executable\n- Tasks should have clear, non-overlapping scope\n- Identify dependencies between tasks (what must complete before what)\n- Group tasks that can run in parallel\n- Each task needs a unique ID (format: task_001, task_002, etc.)\n\n## Task Structure:\nEach task must include:\n- id: Unique identifier (e.g., \"task_001\")\n- title: Short descriptive title\n- description: Clear explanation of what the task should accomplish\n- scope: List of files/paths this task should work on\n- priority: 1-10 (1 = highest priority)\n- dependencies: List of task IDs that must complete first (empty array if none)\n\n## CRITICAL - Response Format:\n\nYou MUST provide your task list using the exact format below. The orchestration system parses this format to spawn workers.\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"task_list\",\n  \"data\": {\n    \"total_tasks\": 3,\n    \"tasks\": [\n      {\n        \"id\": \"task_001\",\n        \"title\": \"Short descriptive title\",\n        \"description\": \"Detailed description of what this task should accomplish\",\n        \"scope\": [\"path/to/file1.js\", \"path/to/file2.js\"],\n        \"priority\": 1,\n        \"dependencies\": []\n      },\n      {\n        \"id\": \"task_002\",\n        \"title\": \"Another task title\",\n        \"description\": \"What this task does\",\n        \"scope\": [\"path/to/other/file.js\"],\n        \"priority\": 2,\n        \"dependencies\": []\n      },\n      {\n        \"id\": \"task_003\",\n        \"title\": \"Final task\",\n        \"description\": \"Task that depends on others\",\n        \"scope\": [\"path/to/final.js\"],\n        \"priority\": 3,\n        \"dependencies\": [\"task_001\", \"task_002\"]\n      }\n    ],\n    \"parallelizable_groups\": [[\"task_001\", \"task_002\"], [\"task_003\"]],\n    \"execution_order\": [\"task_001\", \"task_002\", \"task_003\"]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nRemember: Each task will be executed by a separate worker agent spawned by the orchestration system. Make sure tasks are self-contained and have clear boundaries. DO NOT use Task() to spawn workers yourself.",
+          "user": "Create the task list based on your analysis:\n\nAnalysis Summary: {ANALYSIS_SUMMARY}\n\nOriginal Request: {USER_REQUEST}\n\nKey Files Identified: {KEY_FILES}",
+          "format": {
+            "phase": "task_list",
+            "requiredFields": [
+              "tasks"
+            ],
+            "optionalFields": [
+              "total_tasks",
+              "parallelizable_groups",
+              "execution_order"
+            ],
+            "taskSchema": {
+              "required": [
+                "id",
+                "title",
+                "description"
+              ],
+              "optional": [
+                "scope",
+                "priority",
+                "dependencies",
+                "estimated_tokens"
+              ]
+            }
+          }
+        },
+        "worker": {
+          "system": "# WORKER MODE - TASK EXECUTION\n\nYou are a WORKER agent executing a specific sub-task as part of a larger orchestrated operation. Stay focused on your assigned task only.\n\n## Your Assigned Task:\n- Task ID: {TASK_ID}\n- Title: {TASK_TITLE}\n- Description: {TASK_DESCRIPTION}\n- Scope (files to work on): {TASK_SCOPE}\n\n## Important Rules:\n1. Focus ONLY on your assigned task - do not work outside your scope\n2. Do not modify files outside your scope unless absolutely necessary\n3. Report progress periodically so the orchestrator can track you\n4. Report completion when finished\n\n## Progress Reporting:\n\nEvery few significant actions, report your progress using this exact format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"progress\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"in_progress\",\n    \"progress_percent\": 50,\n    \"current_action\": \"Currently working on...\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Completion Report:\n\nWhen you finish your task successfully, you MUST report completion:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"success\",\n    \"summary\": \"Brief summary of what was accomplished\",\n    \"output_files\": [\"list\", \"of\", \"files\", \"modified\"],\n    \"output\": \"Any relevant output content\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Error Report:\n\nIf you encounter an error and cannot complete the task:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"completion\",\n  \"data\": {\n    \"task_id\": \"{TASK_ID}\",\n    \"status\": \"failed\",\n    \"error\": \"Clear description of what went wrong\",\n    \"partial_progress\": \"What was completed before the error\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## Remember:\n- You are one of multiple workers - stay in your lane\n- The orchestrator is monitoring your progress\n- Use the delimiters exactly as shown - they are parsed programmatically",
+          "user": "Execute your assigned task now.\n\nContext - Original user request: {ORIGINAL_REQUEST}\n\nBegin working on your task. Remember to report progress and completion using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "progressPhase": "progress",
+            "completionPhase": "completion"
+          }
+        },
+        "aggregation": {
+          "system": "# ORCHESTRATOR MODE - AGGREGATION PHASE\n\nAll worker tasks are now complete. Your role is to review and merge the outputs from all workers into a coherent final result.\n\n## Your Responsibilities:\n1. Review each worker's output carefully\n2. Check for conflicts or inconsistencies between worker outputs\n3. Check for duplicate work\n4. Merge outputs into a unified result\n5. Resolve any conflicts (or flag them for user decision)\n6. Ensure the final result satisfies the original request\n\n## Conflict Types to Watch For:\n- Multiple workers modified the same file\n- Inconsistent naming conventions across outputs\n- Duplicate content or functionality\n- Missing integration between components\n\n## CRITICAL - Response Format:\n\nAfter reviewing and merging, you MUST provide your result using this exact format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"success\",\n    \"summary\": \"Brief summary of the merged result\",\n    \"conflicts\": [\n      {\n        \"type\": \"conflict_type\",\n        \"description\": \"What the conflict is\",\n        \"resolution\": \"How it was resolved (or 'needs_user_input')\"\n      }\n    ],\n    \"output_files\": [\"list\", \"of\", \"final\", \"files\"],\n    \"merged_output\": \"Description of the final merged output\"\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\n## If Conflicts Need User Input:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"aggregation\",\n  \"data\": {\n    \"status\": \"needs_input\",\n    \"summary\": \"Completed merge but some conflicts need resolution\",\n    \"conflicts\": [\n      {\n        \"type\": \"file_conflict\",\n        \"description\": \"Worker 1 and Worker 3 both modified config.js differently\",\n        \"options\": [\"Use Worker 1 version\", \"Use Worker 3 version\", \"Merge manually\"],\n        \"resolution\": \"needs_user_input\"\n      }\n    ]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>\n\nBe thorough in your review - this is the final quality check before presenting results to the user.",
+          "user": "Review and merge the following worker outputs:\n\n{WORKER_OUTPUTS}\n\nOriginal request for context: {ORIGINAL_REQUEST}\n\nMerge these outputs into a coherent final result. Use the <<<ORCHESTRATOR_RESPONSE>>> format for your response.",
+          "format": {
+            "phase": "aggregation",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "conflicts",
+              "merged_output",
+              "output_files"
+            ]
+          }
+        },
+        "verification": {
+          "system": "# ORCHESTRATOR MODE - VERIFICATION PHASE\n\nThe aggregation is complete. Your role is to verify the merged output is correct and complete.\n\n## Verification Checklist:\n1. Does the output satisfy the original request?\n2. Are all components properly integrated?\n3. Are there any syntax errors or bugs?\n4. Is the code/output consistent in style?\n5. Are there any missing pieces?\n\n## Response Format:\n\n<<<ORCHESTRATOR_RESPONSE>>>\n{\n  \"phase\": \"verification\",\n  \"data\": {\n    \"status\": \"passed|failed|passed_with_warnings\",\n    \"summary\": \"Verification result summary\",\n    \"issues\": [\n      {\n        \"severity\": \"error|warning|info\",\n        \"description\": \"What the issue is\",\n        \"location\": \"file or component\",\n        \"suggested_fix\": \"How to fix it\"\n      }\n    ],\n    \"auto_fixed\": [\"List of issues that were auto-fixed\"]\n  }\n}\n<<<END_ORCHESTRATOR_RESPONSE>>>",
+          "user": "Verify this merged output:\n\n{MERGED_OUTPUT}\n\nOriginal request: {ORIGINAL_REQUEST}\n\nCheck for completeness and correctness. Report your findings using the <<<ORCHESTRATOR_RESPONSE>>> format.",
+          "format": {
+            "phase": "verification",
+            "requiredFields": [
+              "status"
+            ],
+            "optionalFields": [
+              "summary",
+              "issues",
+              "auto_fixed"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "OUTPUT_FORMAT": "markdown",
+        "LANGUAGE": "english",
+        "VERBOSITY": "detailed",
+        "INCLUDE_EXAMPLES": true
+      },
+      "hooks": {
+        "onAnalysisComplete": null,
+        "onTasksGenerated": null,
+        "onWorkerStart": null,
+        "onWorkerComplete": null,
+        "onAllWorkersComplete": null,
+        "onError": null
+      },
+      "ui": {
+        "color": "#10B981",
+        "icon": "book-open",
+        "showWorkerDetails": false,
+        "showTokenEstimate": false,
+        "showProgressBar": false,
+        "progressStyle": "simple",
+        "workerColumns": [
+          "status",
+          "progress",
+          "tools",
+          "time"
+        ]
+      },
+      "_isSystem": true,
+      "_filePath": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote\\backend\\orchestrator\\templates\\_default.json",
+      "icon": "book-open",
+      "extends": "_default"
+    },
+    "mainSessionId": "local_39563e89-d0fd-4a47-9813-7333bf337bdf",
+    "cwd": "C:\\Users\\lescu\\Desktop\\Projects\\ClaudeCode_Remote",
+    "userRequest": "DocClaude_[feature].md creation\nexplore codebase and create verbose documentation for every aspect of the code\neach doc as to be in 2 part [verbose explain of the functionnement] [var/input/output important of code]\nMax 25k token per file, u can check it by try to full read it, if u can ure good\nIf u see some TODO in code, dont do it but mention it to your supervisor in final task output<\nProduce documentation at \\ClaudeCode_Remote\\DocClaude",
+    "status": "analyzing",
+    "currentPhase": "analysis",
+    "analysis": null,
+    "tasks": [],
+    "parallelGroups": [],
+    "workers": {},
+    "stats": {
+      "totalTools": 0,
+      "reads": 0,
+      "writes": 0,
+      "edits": 0,
+      "bash": 0,
+      "glob": 0,
+      "grep": 0,
+      "task": 0,
+      "other": 0
+    },
+    "customVariables": {},
+    "createdAt": "2026-01-18T18:38:38.854Z",
+    "updatedAt": "2026-01-18T18:38:40.475Z",
+    "startedAt": "2026-01-18T18:38:40.475Z",
+    "completedAt": null,
+    "errors": []
+  }
+]

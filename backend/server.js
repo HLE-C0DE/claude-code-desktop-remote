@@ -169,6 +169,27 @@ const cdpMonitor = new CDPConnectionMonitor({
   checkInterval: 5000 // Vérifier toutes les 5 secondes
 });
 
+// Initialiser le module d'orchestration
+const OrchestratorModule = require('./orchestrator');
+const orchestratorModule = new OrchestratorModule(cdpController, {
+  templatesDir: path.join(__dirname, 'orchestrator/templates'),
+  worker: {
+    maxWorkers: 5,
+    pollInterval: 2000,
+    workerTimeout: 300000 // 5 minutes
+  }
+});
+
+// Rate limiter specifique pour la creation d'orchestrateurs
+const orchestratorCreateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // 10 creations max par minute
+  message: { error: 'Trop de creations d\'orchestrateurs, ralentissez' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => pinManager.getClientIP(req)
+});
+
 // Créer le serveur HTTP
 const server = http.createServer(app);
 
@@ -309,6 +330,15 @@ const authMiddleware = (req, res, next) => {
     const sessionToken = req.headers['x-session-token'] ||
                         req.cookies?.sessionToken ||
                         req.query?.token;
+
+    console.log('[AUTH DEBUG]', {
+      endpoint: req.path,
+      hasHeader: !!req.headers['x-session-token'],
+      hasCookie: !!req.cookies?.sessionToken,
+      hasQuery: !!req.query?.token,
+      sessionToken: sessionToken?.substring(0, 10) + '...',
+      ip
+    });
 
     if (pinManager.isSessionValid(sessionToken, ip)) {
       return next();
@@ -1030,7 +1060,9 @@ app.get('/api/session/:id', authMiddleware, async (req, res) => {
       });
     }
 
-    const cdpSessions = await cdpController.getAllSessions();
+    // Include hidden sessions (like orchestrator workers) when looking up by ID
+    // since the user explicitly requested this specific session
+    const cdpSessions = await cdpController.getAllSessions(false, true);
     const currentSessionId = await cdpController.getCurrentSessionId();
     const cdpSession = cdpSessions.find(s => s.sessionId === sessionId);
 
@@ -1049,6 +1081,8 @@ app.get('/api/session/:id', authMiddleware, async (req, res) => {
       rawTranscript = transcript; // Sauvegarder pour detectRunningTool
       if (Array.isArray(transcript)) {
         const rawMessages = [];
+        let pendingAgentPrompts = 0; // Compteur de prompts d'agents à cacher
+        let lastAssistantHadTaskTool = false; // Le dernier assistant a-t-il utilisé Task?
 
         for (const entry of transcript) {
           if (entry.type !== 'user' && entry.type !== 'assistant') continue;
@@ -1068,14 +1102,35 @@ app.get('/api/session/:id', authMiddleware, async (req, res) => {
             )) continue;
 
             if (text) {
+              // Marquer comme prompt d'agent si:
+              // 1. On a des prompts d'agents en attente
+              // 2. ET le dernier message assistant a utilisé le tool Task
+              const isAgentPrompt = pendingAgentPrompts > 0 && lastAssistantHadTaskTool;
+              if (isAgentPrompt) {
+                pendingAgentPrompts--;
+              }
+
               rawMessages.push({
                 uuid: entry.uuid || `user-${rawMessages.length}`,
                 role: 'user',
                 content: text,
-                timestamp: timestamp
+                timestamp: timestamp,
+                isAgentPrompt: isAgentPrompt // Marquer si c'est un prompt d'agent
               });
             }
+
+            // Reset après un message user
+            lastAssistantHadTaskTool = false;
           } else if (entry.type === 'assistant') {
+            // Compter le nombre d'agents spawnés (tool Task)
+            const taskToolCount = toolUses.filter(t => t.name === 'Task').length;
+            lastAssistantHadTaskTool = taskToolCount > 0;
+
+            if (taskToolCount > 0) {
+              pendingAgentPrompts += taskToolCount;
+              console.log(`[Agent Spawn] Détecté ${taskToolCount} spawn(s) d'agent(s), ${pendingAgentPrompts} prompts à cacher`);
+            }
+
             const todoData = extractTodoData(toolUses);
 
             // Créer message task séparé pour les todos
@@ -1237,6 +1292,8 @@ app.get('/api/session/:id/messages', authMiddleware, async (req, res) => {
 
     if (Array.isArray(transcript)) {
       const rawMessages = [];
+      let pendingAgentPrompts = 0; // Compteur de prompts d'agents à cacher
+      let lastAssistantHadTaskTool = false; // Le dernier assistant a-t-il utilisé Task?
 
       for (const entry of transcript) {
         if (entry.type !== 'user' && entry.type !== 'assistant') continue;
@@ -1256,13 +1313,34 @@ app.get('/api/session/:id/messages', authMiddleware, async (req, res) => {
             continue;
           }
 
+          // Marquer comme prompt d'agent si:
+          // 1. On a des prompts d'agents en attente
+          // 2. ET le dernier message assistant a utilisé le tool Task
+          const isAgentPrompt = pendingAgentPrompts > 0 && lastAssistantHadTaskTool;
+          if (isAgentPrompt) {
+            pendingAgentPrompts--;
+          }
+
           rawMessages.push({
             uuid: entry.uuid || crypto.randomUUID(),
             role: 'user',
             content: text,
-            timestamp: timestamp
+            timestamp: timestamp,
+            isAgentPrompt: isAgentPrompt // Marquer si c'est un prompt d'agent
           });
+
+          // Reset après un message user
+          lastAssistantHadTaskTool = false;
         } else if (entry.type === 'assistant') {
+          // Compter le nombre d'agents spawnés (tool Task)
+          const taskToolCount = toolUses.filter(t => t.name === 'Task').length;
+          lastAssistantHadTaskTool = taskToolCount > 0;
+
+          if (taskToolCount > 0) {
+            pendingAgentPrompts += taskToolCount;
+            console.log(`[Agent Spawn] Détecté ${taskToolCount} spawn(s) d'agent(s), ${pendingAgentPrompts} prompts à cacher`);
+          }
+
           const todoData = extractTodoData(toolUses);
 
           // Créer message task séparé pour les todos
@@ -2274,9 +2352,12 @@ app.get('/api/debug/apis', authMiddleware, async (req, res) => {
 
 // Endpoint de debug pour voir la structure des sessions CDP
 // Accessible via: fetch('/api/debug/sessions').then(r => r.json()).then(console.log)
+// Use ?includeHidden=true to include orchestrator worker sessions
 app.get('/api/debug/sessions', authMiddleware, async (req, res) => {
   try {
-    const sessions = await cdpController.getAllSessions();
+    // Debug endpoint includes hidden sessions by default
+    const includeHidden = req.query.includeHidden !== 'false';
+    const sessions = await cdpController.getAllSessions(false, includeHidden);
     if (!sessions || sessions.length === 0) {
       return res.json({ message: 'No sessions found', sessions: [] });
     }
@@ -2285,6 +2366,7 @@ app.get('/api/debug/sessions', authMiddleware, async (req, res) => {
     const firstSession = sessions[0];
     res.json({
       sessionCount: sessions.length,
+      includeHidden,
       firstSessionKeys: Object.keys(firstSession),
       firstSessionFull: firstSession,
       allSessions: sessions
@@ -2431,9 +2513,12 @@ app.get('/api/status', authMiddleware, async (req, res) => {
 });
 
 // Lister toutes les sessions Desktop (alternative à /api/sessions)
+// Use ?includeHidden=true to include orchestrator worker sessions
 app.get('/api/cdp-sessions', authMiddleware, async (req, res) => {
   try {
-    const sessions = await cdpController.getAllSessions();
+    // By default, filter out hidden orchestrator worker sessions
+    const includeHidden = req.query.includeHidden === 'true';
+    const sessions = await cdpController.getAllSessions(false, includeHidden);
     const currentSession = await cdpController.getCurrentSessionId();
 
     res.json({
@@ -2442,6 +2527,7 @@ app.get('/api/cdp-sessions', authMiddleware, async (req, res) => {
         isCurrent: s.sessionId === currentSession
       })),
       currentSession,
+      includeHidden,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -2576,6 +2662,1290 @@ app.post('/api/archive-session/:sessionId', authMiddleware, async (req, res) => 
     });
   }
 });
+
+// ============================================================================
+// Routes API pour l'orchestrateur (Big Tasks)
+// ============================================================================
+
+// --- Template Endpoints ---
+
+// GET /api/orchestrator/templates - List all templates
+app.get('/api/orchestrator/templates', authMiddleware, async (req, res) => {
+  try {
+    const templates = await orchestratorModule.templates.getAllTemplates();
+    res.json({
+      success: true,
+      templates: templates,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/templates/:id - Get template details
+app.get('/api/orchestrator/templates/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resolved = req.query.resolved !== 'false'; // Default true
+
+    let template;
+    if (resolved) {
+      template = await orchestratorModule.templates.getTemplate(id);
+    } else {
+      template = orchestratorModule.templates.templates.get(id);
+      if (!template) {
+        return res.status(404).json({
+          success: false,
+          error: 'NotFoundError',
+          message: `Template '${id}' not found`,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      template: template,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/templates - Create new template
+app.post('/api/orchestrator/templates', authMiddleware, async (req, res) => {
+  try {
+    const templateData = req.body;
+
+    if (!templateData.name) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'Template name is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const template = await orchestratorModule.templates.createTemplate(templateData);
+    res.status(201).json({
+      success: true,
+      template: template,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('already exists')) {
+      return res.status(409).json({
+        success: false,
+        error: 'ConflictError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Invalid template') || error.message.includes('cannot')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// PUT /api/orchestrator/templates/:id - Update template
+app.put('/api/orchestrator/templates/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const templateData = req.body;
+
+    const template = await orchestratorModule.templates.updateTemplate(id, templateData);
+    res.json({
+      success: true,
+      template: template,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('system template') || error.message.includes('Cannot update')) {
+      return res.status(403).json({
+        success: false,
+        error: 'ForbiddenError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Invalid template')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// DELETE /api/orchestrator/templates/:id - Delete template
+app.delete('/api/orchestrator/templates/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await orchestratorModule.templates.deleteTemplate(id);
+    res.json({
+      success: true,
+      message: 'Template deleted',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('system template') || error.message.includes('Cannot delete')) {
+      return res.status(403).json({
+        success: false,
+        error: 'ForbiddenError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/templates/:id/duplicate - Duplicate template
+app.post('/api/orchestrator/templates/:id/duplicate', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'New template name is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const template = await orchestratorModule.templates.duplicateTemplate(id, name);
+    res.status(201).json({
+      success: true,
+      template: template,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/templates/import - Import template from JSON
+app.post('/api/orchestrator/templates/import', authMiddleware, async (req, res) => {
+  try {
+    const { template: templateData } = req.body;
+
+    if (!templateData) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'Template data is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const template = await orchestratorModule.templates.createTemplate(templateData);
+    res.status(201).json({
+      success: true,
+      template: template,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('already exists')) {
+      return res.status(409).json({
+        success: false,
+        error: 'ConflictError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/templates/export - Export all custom templates
+app.get('/api/orchestrator/templates/export', authMiddleware, async (req, res) => {
+  try {
+    const allTemplates = await orchestratorModule.templates.getAllTemplates();
+    const customTemplates = allTemplates.filter(t => !t.isSystem);
+
+    // Get full template data for each custom template
+    const fullTemplates = await Promise.all(
+      customTemplates.map(t => orchestratorModule.templates.getTemplate(t.id))
+    );
+
+    res.json({
+      success: true,
+      templates: fullTemplates,
+      exportedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// --- Orchestrator Endpoints ---
+
+// POST /api/orchestrator/create - Create new orchestrator session
+app.post('/api/orchestrator/create', orchestratorCreateLimiter, authMiddleware, async (req, res) => {
+  try {
+    const { templateId, cwd, message, customVariables, options } = req.body;
+
+    // Validate required fields
+    if (!templateId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'templateId is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (!cwd) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'cwd is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'message is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Create orchestrator
+    const orchestrator = await orchestratorModule.orchestrators.create({
+      templateId,
+      cwd,
+      message,
+      customVariables: customVariables || {}
+    });
+
+    // Auto-start orchestrator (create main session and begin analysis)
+    const autoStart = options?.autoStart !== false; // Default: true
+    if (autoStart) {
+      try {
+        await orchestratorModule.orchestrators.start(orchestrator.id);
+      } catch (startError) {
+        console.error('[Orchestrator API] Failed to auto-start:', startError.message);
+        // Continue anyway - user can manually start later
+      }
+    }
+
+    // Get updated state after start
+    const updatedOrchestrator = orchestratorModule.orchestrators.get(orchestrator.id);
+
+    res.status(201).json({
+      success: true,
+      orchestrator: {
+        id: updatedOrchestrator.id,
+        templateId: updatedOrchestrator.templateId,
+        mainSessionId: updatedOrchestrator.mainSessionId,
+        status: updatedOrchestrator.status,
+        currentPhase: updatedOrchestrator.currentPhase,
+        createdAt: updatedOrchestrator.createdAt.toISOString()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/by-session/:sessionId - Find orchestrator by session ID
+app.get('/api/orchestrator/by-session/:sessionId', authMiddleware, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    // Search all orchestrators for one with this mainSessionId
+    const allOrchestrators = orchestratorModule.orchestrators.getAll();
+    console.log('[Orchestrator API] Looking for session:', sessionId);
+    console.log('[Orchestrator API] Available orchestrators:', allOrchestrators.map(o => ({ id: o.id, mainSessionId: o.mainSessionId })));
+    const orchestrator = allOrchestrators.find(o => o.mainSessionId === sessionId);
+
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `No orchestrator found for session '${sessionId}'`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Return orchestrator ID only (lightweight)
+    res.json({
+      success: true,
+      orchestratorId: orchestrator.id,
+      templateId: orchestrator.templateId,
+      status: orchestrator.status,
+      currentPhase: orchestrator.currentPhase,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/:id - Get orchestrator details
+app.get('/api/orchestrator/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Get worker states
+    const workers = orchestratorModule.workers.getAllWorkers(id);
+    const workerMap = {};
+    for (const worker of workers) {
+      workerMap[worker.taskId] = {
+        sessionId: worker.sessionId,
+        status: worker.status,
+        progress: worker.progress,
+        currentAction: worker.currentAction,
+        toolStats: worker.toolStats
+      };
+    }
+
+    res.json({
+      success: true,
+      orchestrator: {
+        id: orchestrator.id,
+        templateId: orchestrator.templateId,
+        mainSessionId: orchestrator.mainSessionId,
+        status: orchestrator.status,
+        currentPhase: orchestrator.currentPhase,
+        analysis: orchestrator.analysis,
+        tasks: orchestrator.tasks,
+        workers: workerMap,
+        stats: orchestrator.stats,
+        createdAt: orchestrator.createdAt?.toISOString(),
+        startedAt: orchestrator.startedAt?.toISOString(),
+        completedAt: orchestrator.completedAt?.toISOString()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/:id/status - Get orchestrator status (lightweight)
+app.get('/api/orchestrator/:id/status', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const status = orchestratorModule.orchestrators.getStatus(id);
+
+    if (!status) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Get worker progress summary
+    const workers = orchestratorModule.workers.getAllWorkers(id);
+    const progress = {
+      total: workers.length,
+      completed: workers.filter(w => w.status === 'completed').length,
+      running: workers.filter(w => ['running', 'spawning'].includes(w.status)).length,
+      pending: workers.filter(w => w.status === 'pending').length,
+      failed: workers.filter(w => ['failed', 'timeout', 'cancelled'].includes(w.status)).length,
+      percent: workers.length > 0
+        ? Math.round((workers.filter(w => w.status === 'completed').length / workers.length) * 100)
+        : 0
+    };
+
+    res.json({
+      success: true,
+      status: {
+        id: status.id,
+        status: status.status,
+        phase: status.currentPhase,
+        progress: progress,
+        stats: status.stats
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/message - Send message to orchestrator main session
+app.post('/api/orchestrator/:id/message', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'Message is required and must be a non-empty string',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (!orchestrator.mainSessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'InvalidStateError',
+        message: 'Orchestrator does not have a main session yet. Start the orchestrator first.',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Send message to the main session
+    await cdpController.sendMessage(orchestrator.mainSessionId, message.trim());
+
+    res.json({
+      success: true,
+      message: 'Message sent successfully',
+      sessionId: orchestrator.mainSessionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error(`[API] Error sending message to orchestrator ${req.params.id}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/start - Start orchestration
+app.post('/api/orchestrator/:id/start', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await orchestratorModule.orchestrators.start(id);
+
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    res.json({
+      success: true,
+      message: 'Orchestration started',
+      status: orchestrator.status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Cannot start')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/confirm-tasks - Confirm tasks and spawn workers
+app.post('/api/orchestrator/:id/confirm-tasks', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { modifications } = req.body;
+
+    const result = await orchestratorModule.confirmTasksAndSpawn(id, modifications);
+
+    res.json({
+      success: true,
+      message: 'Workers spawned',
+      workersCreated: result.workersCreated,
+      tasksQueued: result.tasksQueued,
+      skipped: result.skipped,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/pause - Pause orchestrator
+app.post('/api/orchestrator/:id/pause', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await orchestratorModule.orchestrators.pause(id);
+
+    // Count paused workers
+    const activeWorkers = orchestratorModule.workers.getActiveWorkers(id);
+
+    res.json({
+      success: true,
+      message: 'Orchestrator paused',
+      pausedWorkers: activeWorkers.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Cannot pause')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/resume - Resume orchestrator
+app.post('/api/orchestrator/:id/resume', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await orchestratorModule.orchestrators.resume(id);
+
+    res.json({
+      success: true,
+      message: 'Orchestrator resumed',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Cannot resume')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/cancel - Cancel orchestrator
+app.post('/api/orchestrator/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { archiveWorkers = true, deleteWorkers = false } = req.body;
+
+    const result = await orchestratorModule.cancelAndCleanup(id, {
+      archiveWorkers,
+      deleteWorkers
+    });
+
+    res.json({
+      success: true,
+      message: 'Orchestrator cancelled',
+      cleanedUp: {
+        workers: result.workers,
+        archived: result.archived
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (error.message.includes('Cannot cancel')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// --- Worker Endpoints ---
+
+// GET /api/orchestrator/:id/workers - List all workers
+app.get('/api/orchestrator/:id/workers', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status: statusFilter } = req.query;
+
+    // Check orchestrator exists
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    let workers = orchestratorModule.workers.getAllWorkers(id);
+
+    // Filter by status if provided
+    if (statusFilter) {
+      workers = workers.filter(w => w.status === statusFilter);
+    }
+
+    res.json({
+      success: true,
+      workers: workers.map(w => ({
+        taskId: w.taskId,
+        sessionId: w.sessionId,
+        status: w.status,
+        progress: w.progress,
+        currentAction: w.currentAction,
+        toolStats: w.toolStats,
+        startedAt: w.startedAt?.toISOString(),
+        completedAt: w.completedAt?.toISOString()
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/orchestrator/:id/workers/:taskId - Get specific worker
+app.get('/api/orchestrator/:id/workers/:taskId', authMiddleware, async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+
+    // Check orchestrator exists
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const worker = orchestratorModule.workers.getWorkerByTaskId(taskId);
+    if (!worker || worker.orchestratorId !== id) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Worker for task '${taskId}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.json({
+      success: true,
+      worker: {
+        taskId: worker.taskId,
+        sessionId: worker.sessionId,
+        task: worker.task,
+        status: worker.status,
+        progress: worker.progress,
+        currentAction: worker.currentAction,
+        output: worker.output,
+        outputFiles: worker.outputFiles,
+        error: worker.error,
+        toolStats: worker.toolStats,
+        retryCount: worker.retryCount,
+        startedAt: worker.startedAt?.toISOString(),
+        completedAt: worker.completedAt?.toISOString()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/workers/:taskId/retry - Retry failed worker
+app.post('/api/orchestrator/:id/workers/:taskId/retry', authMiddleware, async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+
+    // Check orchestrator exists
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const worker = orchestratorModule.workers.getWorkerByTaskId(taskId);
+    if (!worker || worker.orchestratorId !== id) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Worker for task '${taskId}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const retryResult = await orchestratorModule.workers.retryWorker(worker.sessionId);
+
+    res.json({
+      success: true,
+      message: 'Worker retry started',
+      newSessionId: retryResult.sessionId,
+      retryCount: retryResult.retryCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error.message.includes('Cannot retry') || error.message.includes('exceeded')) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/orchestrator/:id/workers/:taskId/cancel - Cancel specific worker
+app.post('/api/orchestrator/:id/workers/:taskId/cancel', authMiddleware, async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+
+    // Check orchestrator exists
+    const orchestrator = orchestratorModule.orchestrators.get(id);
+    if (!orchestrator) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Orchestrator '${id}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const worker = orchestratorModule.workers.getWorkerByTaskId(taskId);
+    if (!worker || worker.orchestratorId !== id) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFoundError',
+        message: `Worker for task '${taskId}' not found`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    await orchestratorModule.workers.cancelWorker(worker.sessionId);
+
+    res.json({
+      success: true,
+      message: 'Worker cancelled',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ============================================================================
+// Routes SubSession (Sous-sessions avec retour automatique)
+// ============================================================================
+
+// GET /api/subsessions - List all subsessions
+app.get('/api/subsessions', authMiddleware, async (req, res) => {
+  try {
+    const stats = orchestratorModule.subSessions.getStats();
+    const relations = Array.from(orchestratorModule.subSessions.relations.values());
+
+    res.json({
+      success: true,
+      stats,
+      subsessions: relations.map(r => ({
+        childSessionId: r.childSessionId,
+        parentSessionId: r.parentSessionId,
+        status: r.status,
+        messageCount: r.messageCount,
+        createdAt: r.createdAt,
+        lastActivityAt: r.lastActivityAt,
+        error: r.error
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/subsessions/:childId - Get specific subsession
+app.get('/api/subsessions/:childId', authMiddleware, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    const relation = orchestratorModule.subSessions.getRelation(childId);
+
+    if (!relation) {
+      return res.status(404).json({
+        success: false,
+        error: 'NotFound',
+        message: `SubSession not found: ${childId}`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.json({
+      success: true,
+      subsession: relation,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/register - Manually register a subsession
+app.post('/api/subsessions/register', authMiddleware, async (req, res) => {
+  try {
+    const { childSessionId, parentSessionId, taskToolId } = req.body;
+
+    if (!childSessionId || !parentSessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ValidationError',
+        message: 'childSessionId and parentSessionId are required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const relation = orchestratorModule.subSessions.registerSubSession(
+      childSessionId,
+      parentSessionId,
+      { taskToolId }
+    );
+
+    res.json({
+      success: true,
+      subsession: relation,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/:childId/force-return - Force return result to parent
+app.post('/api/subsessions/:childId/force-return', authMiddleware, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    const result = await orchestratorModule.subSessions.forceReturn(childId);
+
+    res.json({
+      success: true,
+      result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// DELETE /api/subsessions/:childId - Unregister a subsession
+app.delete('/api/subsessions/:childId', authMiddleware, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    const archiveSession = req.query.archive === 'true';
+
+    await orchestratorModule.subSessions.unregister(childId, { archiveSession });
+
+    res.json({
+      success: true,
+      message: 'SubSession unregistered',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// GET /api/subsessions/parent/:parentId - Get all children for a parent
+app.get('/api/subsessions/parent/:parentId', authMiddleware, async (req, res) => {
+  try {
+    const { parentId } = req.params;
+    const children = orchestratorModule.subSessions.getChildren(parentId);
+
+    res.json({
+      success: true,
+      parentSessionId: parentId,
+      children: children.map(r => ({
+        childSessionId: r.childSessionId,
+        status: r.status,
+        messageCount: r.messageCount,
+        lastActivityAt: r.lastActivityAt
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/cleanup - Cleanup old/orphaned subsessions
+app.post('/api/subsessions/cleanup', authMiddleware, async (req, res) => {
+  try {
+    const maxAge = req.body.maxAge || 3600000; // 1 hour default
+    const result = await orchestratorModule.subSessions.cleanup({ maxAge });
+
+    res.json({
+      success: true,
+      result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/start-monitoring - Start subsession monitoring
+app.post('/api/subsessions/start-monitoring', authMiddleware, async (req, res) => {
+  try {
+    orchestratorModule.subSessions.startMonitoring();
+
+    res.json({
+      success: true,
+      message: 'Monitoring started',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/stop-monitoring - Stop subsession monitoring
+app.post('/api/subsessions/stop-monitoring', authMiddleware, async (req, res) => {
+  try {
+    orchestratorModule.subSessions.stopMonitoring();
+
+    res.json({
+      success: true,
+      message: 'Monitoring stopped',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/watch/:parentId - Watch a parent session for Task spawns
+app.post('/api/subsessions/watch/:parentId', authMiddleware, async (req, res) => {
+  try {
+    const { parentId } = req.params;
+
+    await orchestratorModule.subSessions.watchParentSession(parentId);
+
+    res.json({
+      success: true,
+      message: `Now watching parent session: ${parentId}`,
+      pendingSpawns: orchestratorModule.subSessions.pendingTaskSpawns.size,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/scan/:parentId - Scan parent session for Task tool invocations
+app.post('/api/subsessions/scan/:parentId', authMiddleware, async (req, res) => {
+  try {
+    const { parentId } = req.params;
+
+    const taskInvocations = await orchestratorModule.subSessions.scanForTaskSpawns(parentId);
+
+    res.json({
+      success: true,
+      parentSessionId: parentId,
+      taskInvocations,
+      pendingSpawns: orchestratorModule.subSessions.pendingTaskSpawns.size,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// POST /api/subsessions/auto-detect - Trigger auto-detection of new sessions
+app.post('/api/subsessions/auto-detect', authMiddleware, async (req, res) => {
+  try {
+    const linkedCount = await orchestratorModule.subSessions.autoDetectNewSessions();
+
+    res.json({
+      success: true,
+      linkedCount,
+      totalSubSessions: orchestratorModule.subSessions.relations.size,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'InternalError',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ============================================================================
+// Fin des routes orchestrateur
+// ============================================================================
 
 // Servir l'application web
 app.get('*', (req, res) => {
@@ -2736,6 +4106,241 @@ cdpMonitor.on('new-connection', (data) => {
     count: data.count,
     connections: data.connections,
     timestamp: data.timestamp.toISOString()
+  });
+});
+
+// Ecouter les evenements de l'orchestrateur (Big Tasks)
+orchestratorModule.on('orchestrator:created', (data) => {
+  console.log(`[Orchestrator] Created: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:created',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:started', (data) => {
+  console.log(`[Orchestrator] Started: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:started',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:phaseChanged', (data) => {
+  console.log(`[Orchestrator] Phase changed: ${data.id} -> ${data.currentPhase}`);
+  broadcastToClients({
+    type: 'orchestrator:phaseChanged',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:analysisComplete', (data) => {
+  console.log(`[Orchestrator] Analysis complete: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:analysisComplete',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:tasksReady', (data) => {
+  console.log(`[Orchestrator] Tasks ready: ${data.id} (${data.taskCount} tasks)`);
+  broadcastToClients({
+    type: 'orchestrator:tasksReady',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:progress', (data) => {
+  broadcastToClients({
+    type: 'orchestrator:progress',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:completed', (data) => {
+  console.log(`[Orchestrator] Completed: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:completed',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:error', (data) => {
+  console.error(`[Orchestrator] Error: ${data.id} - ${data.error}`);
+  broadcastToClients({
+    type: 'orchestrator:error',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:cancelled', (data) => {
+  console.log(`[Orchestrator] Cancelled: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:cancelled',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:paused', (data) => {
+  console.log(`[Orchestrator] Paused: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:paused',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('orchestrator:resumed', (data) => {
+  console.log(`[Orchestrator] Resumed: ${data.id}`);
+  broadcastToClients({
+    type: 'orchestrator:resumed',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Worker events
+orchestratorModule.on('worker:spawned', (data) => {
+  console.log(`[Worker] Spawned: ${data.taskId} (${data.sessionId})`);
+  broadcastToClients({
+    type: 'worker:spawned',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('worker:progress', (data) => {
+  broadcastToClients({
+    type: 'worker:progress',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('worker:completed', (data) => {
+  console.log(`[Worker] Completed: ${data.taskId}`);
+  broadcastToClients({
+    type: 'worker:completed',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('worker:failed', (data) => {
+  console.error(`[Worker] Failed: ${data.taskId} - ${data.error}`);
+  broadcastToClients({
+    type: 'worker:failed',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('worker:timeout', (data) => {
+  console.warn(`[Worker] Timeout: ${data.taskId}`);
+  broadcastToClients({
+    type: 'worker:timeout',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('worker:cancelled', (data) => {
+  console.log(`[Worker] Cancelled: ${data.taskId}`);
+  broadcastToClients({
+    type: 'worker:cancelled',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// SubSession events
+orchestratorModule.on('subsession:registered', (data) => {
+  console.log(`[SubSession] Registered: ${data.childSessionId} -> parent: ${data.parentSessionId}`);
+  broadcastToClients({
+    type: 'subsession:registered',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:statusChanged', (data) => {
+  console.log(`[SubSession] Status changed: ${data.childSessionId} ${data.previousStatus} -> ${data.newStatus}`);
+  broadcastToClients({
+    type: 'subsession:statusChanged',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:activity', (data) => {
+  // Don't log every activity to avoid spam
+  broadcastToClients({
+    type: 'subsession:activity',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:resultReturned', (data) => {
+  console.log(`[SubSession] Result returned: ${data.childSessionId} -> ${data.parentSessionId}`);
+  broadcastToClients({
+    type: 'subsession:resultReturned',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:orphaned', (data) => {
+  console.warn(`[SubSession] Orphaned: ${data.childSessionId} (parent: ${data.parentSessionId})`);
+  broadcastToClients({
+    type: 'subsession:orphaned',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:error', (data) => {
+  console.error(`[SubSession] Error: ${data.childSessionId} - ${data.error}`);
+  broadcastToClients({
+    type: 'subsession:error',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:archived', (data) => {
+  console.log(`[SubSession] Archived: ${data.childSessionId}`);
+  broadcastToClients({
+    type: 'subsession:archived',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:monitoring:started', (data) => {
+  console.log('[SubSession] Monitoring started');
+  broadcastToClients({
+    type: 'subsession:monitoring:started',
+    data: data,
+    timestamp: new Date().toISOString()
+  });
+});
+
+orchestratorModule.on('subsession:monitoring:stopped', (data) => {
+  console.log('[SubSession] Monitoring stopped');
+  broadcastToClients({
+    type: 'subsession:monitoring:stopped',
+    data: data,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -2924,6 +4529,14 @@ server.listen(PORT, async () => {
     console.log('✓ Moniteur de connexions CDP démarré (port 9222)');
   } catch (error) {
     console.error('✗ Erreur lors du démarrage du moniteur CDP:', error.message);
+  }
+
+  // Initialiser le module d'orchestration
+  try {
+    await orchestratorModule.initialize();
+    console.log('✓ Module d\'orchestration initialisé');
+  } catch (error) {
+    console.error('✗ Erreur lors de l\'initialisation de l\'orchestrateur:', error.message);
   }
 });
 

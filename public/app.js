@@ -51,6 +51,11 @@ let lastTodosHash = null; // Hash des dernières tâches affichées (évite re-r
 let lastKnownToolUse = null; // Dernier outil utilisé connu
 let lastKnownAssistantText = null; // Dernier texte assistant connu
 
+// User scroll state - prevents auto-scroll when user is reading history
+let userHasScrolledUp = false; // True when user manually scrolled up
+let lastUserScrollTime = 0; // Timestamp of last user scroll
+const USER_SCROLL_LOCK_MS = 5000; // Keep scroll lock for 5 seconds after user scrolls
+
 // Polling pour les sessions CDP en mode "thinking"
 let sessionPollingInterval = null;
 const SESSION_POLLING_MS = 3000; // Polling toutes les 3 secondes quand Claude travaille
@@ -504,6 +509,42 @@ function handleWebSocketMessage(data) {
     case 'cdp-new-connection':
       handleNewCDPConnection(data);
       break;
+
+    // Orchestrator events
+    case 'orchestrator:created':
+      handleOrchestratorCreated(data);
+      break;
+
+    case 'orchestrator:started':
+    case 'orchestrator:phaseChanged':
+    case 'orchestrator:progress':
+      handleOrchestratorUpdate(data);
+      break;
+
+    case 'orchestrator:completed':
+      handleOrchestratorCompleted(data);
+      break;
+
+    case 'orchestrator:error':
+    case 'orchestrator:cancelled':
+      handleOrchestratorStopped(data);
+      break;
+
+    case 'worker:spawned':
+    case 'worker:started':
+    case 'worker:progress':
+      handleWorkerUpdate(data);
+      break;
+
+    case 'worker:completed':
+      handleWorkerCompleted(data);
+      break;
+
+    case 'worker:failed':
+    case 'worker:timeout':
+    case 'worker:cancelled':
+      handleWorkerFailed(data);
+      break;
   }
 }
 
@@ -546,6 +587,95 @@ function handleCDPSessionSwitched(data) {
   // Si on est sur la page session, rediriger vers la nouvelle session active
   if (getCurrentRoute() === 'session') {
     goToSession(data.sessionId);
+  }
+}
+
+// ============================================================================
+// Orchestrator WebSocket Event Handlers
+// ============================================================================
+
+function handleOrchestratorCreated(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  console.log('[Orchestrator] Created:', data.id);
+  showInjectionNotification(`Orchestrator created: ${data.templateId || data.id}`, 'info');
+}
+
+function handleOrchestratorUpdate(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  console.log('[Orchestrator] Update:', data);
+
+  // If we're viewing this orchestrator, refresh the dashboard
+  if (currentOrchestrator && currentOrchestrator.id === data.id) {
+    refreshOrchestratorDashboard();
+  }
+}
+
+function handleOrchestratorCompleted(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  console.log('[Orchestrator] Completed:', data.id);
+  showInjectionNotification('Orchestration completed successfully!', 'success');
+
+  // Refresh if viewing this orchestrator
+  if (currentOrchestrator && currentOrchestrator.id === data.id) {
+    stopOrchestratorPolling();
+    refreshOrchestratorDashboard();
+  }
+}
+
+function handleOrchestratorStopped(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  const eventType = wsMessage.type || 'stopped';
+  console.log(`[Orchestrator] ${eventType}:`, data.id);
+
+  const messages = {
+    'orchestrator:error': 'Orchestration encountered an error',
+    'orchestrator:cancelled': 'Orchestration was cancelled'
+  };
+
+  showInjectionNotification(messages[eventType] || `Orchestrator ${eventType}`, 'error');
+
+  // Refresh if viewing this orchestrator
+  if (currentOrchestrator && currentOrchestrator.id === data.id) {
+    stopOrchestratorPolling();
+    refreshOrchestratorDashboard();
+  }
+}
+
+function handleWorkerUpdate(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  console.log('[Worker] Update:', data.taskId, data);
+
+  // If we're viewing the parent orchestrator, update the worker card
+  if (currentOrchestrator && currentOrchestrator.id === data.orchestratorId) {
+    // Refresh the workers view
+    const workersEl = document.getElementById('orchestrator-workers');
+    if (workersEl && activeOrchestratorTab === 'workers') {
+      refreshOrchestratorDashboard();
+    }
+  }
+}
+
+function handleWorkerCompleted(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  console.log('[Worker] Completed:', data.taskId);
+  showInjectionNotification(`Worker ${data.taskId} completed`, 'success');
+
+  // Refresh if viewing parent orchestrator
+  if (currentOrchestrator && currentOrchestrator.id === data.orchestratorId) {
+    refreshOrchestratorDashboard();
+  }
+}
+
+function handleWorkerFailed(wsMessage) {
+  const data = wsMessage.data || wsMessage;
+  const eventType = wsMessage.type?.replace('worker:', '') || 'failed';
+  console.log(`[Worker] ${eventType}:`, data.taskId);
+
+  showInjectionNotification(`Worker ${data.taskId} ${eventType}`, 'error');
+
+  // Refresh if viewing parent orchestrator
+  if (currentOrchestrator && currentOrchestrator.id === data.orchestratorId) {
+    refreshOrchestratorDashboard();
   }
 }
 
@@ -684,8 +814,13 @@ async function apiRequest(endpoint, options = {}) {
   // SÉCURITÉ: Bloquer les requêtes API si PIN requis mais non authentifié
   // Exception: endpoints /api/auth/ nécessaires pour l'authentification
   if (pinRequired && !isAuthenticated && !endpoint.includes('/api/auth/')) {
-    console.warn('[API] Requête bloquée - authentification requise:', endpoint);
+    console.warn('[API] Requête bloquée - authentification requise:', endpoint, { pinRequired, isAuthenticated, hasToken: !!sessionToken });
     throw new Error('Authentification requise');
+  }
+
+  // Debug logging for orchestrator endpoints
+  if (endpoint.includes('/orchestrator')) {
+    console.log('[API] Orchestrator request:', endpoint, { pinRequired, isAuthenticated, hasToken: !!sessionToken, tokenPrefix: sessionToken?.substring(0, 10) });
   }
 
   const headers = {
@@ -705,6 +840,7 @@ async function apiRequest(endpoint, options = {}) {
 
   // Si 401, forcer re-login
   if (response.status === 401 && pinRequired) {
+    console.error('[API] 401 Unauthorized for:', endpoint);
     isAuthenticated = false;
     authToken = '';
     sessionToken = '';
@@ -741,6 +877,20 @@ async function loadSessions() {
 }
 
 async function loadSessionDetail(sessionId) {
+  // FIX: Reset état de rendu pour éviter pollution entre sessions
+  // (important quand on change directement de session A → session B sans passer par HOME)
+  currentRenderedSession = null;
+  currentRenderedMessageCount = 0;
+  lastTodosHash = null;
+  lastKnownToolUse = null;
+  lastKnownAssistantText = null;
+  lastSessionHash = null;
+  sessionNoChangeCount = 0;
+
+  // FIX: Arrêter les pollings précédents avant de charger une nouvelle session
+  stopSessionPolling();
+  stopOrchestratorPolling();
+
   try {
     // OPTIMISATION: Charger session metadata + derniers 100 messages seulement
     const data = await apiRequest(`/api/session/${sessionId}`);
@@ -767,6 +917,20 @@ async function loadSessionDetail(sessionId) {
     };
 
     sessions[sessionId] = session;
+
+    // Check if this is an orchestrator session
+    const orchestrator = await checkOrchestratorSession(sessionId);
+    if (orchestrator) {
+      console.log('[Orchestrator] Detected orchestrator session:', orchestrator.id);
+      renderOrchestratorDashboard(session, orchestrator);
+      // Stop regular session polling - orchestrator has its own
+      stopSessionPolling();
+      return;
+    }
+
+    // FIX: Reset orchestrator state si on est sur une session normale (pas un orchestrator)
+    currentOrchestrator = null;
+
     renderSessionPage(session);
 
     // Gérer le polling pour les sessions CDP en mode "thinking"
@@ -774,6 +938,7 @@ async function loadSessionDetail(sessionId) {
   } catch (error) {
     console.error('Erreur lors du chargement de la session:', error);
     stopSessionPolling();
+    stopOrchestratorPolling();
     appContent.innerHTML = `
       <div class="card error-card">
         <h2>${t('app.errorTitle')}</h2>
@@ -940,6 +1105,9 @@ function stopSessionPolling() {
     sessionPollingBurstCount = 0; // Reset le compteur de burst
     sessionPollingIdleCount = 0; // Reset le compteur idle
     sessionPollingSlowMode = false; // Reset le mode slow
+    // FIX: Reset hash et compteur pour éviter pollution entre sessions
+    lastSessionHash = null;
+    sessionNoChangeCount = 0;
     console.log('[Polling] Arrêté');
   }
 }
@@ -1095,8 +1263,14 @@ function handleRouteChange() {
     lastTodosHash = null;
     lastKnownToolUse = null;
     lastKnownAssistantText = null;
+    // Reset scroll state when leaving session
+    userHasScrolledUp = false;
+    lastUserScrollTime = 0;
     // Arrêter le polling quand on quitte une session
     stopSessionPolling();
+    // FIX: Reset orchestrator state quand on quitte une session
+    stopOrchestratorPolling();
+    currentOrchestrator = null;
 
     // Rendre immédiatement avec les données en cache
     renderHomePage();
@@ -1815,6 +1989,9 @@ function renderSessionPage(session) {
         <div class="messages-container" id="messages-container">
           ${messagesHTML.length > 0 ? messagesHTML : `<p class="info-message">${i18n.t('session.noMessagesInSession')}</p>`}
         </div>
+        <button class="scroll-to-bottom-btn" id="scroll-to-bottom-btn" onclick="scrollToBottom()" style="display: none;" title="Scroll to bottom">
+          ↓
+        </button>
         <div class="session-task-list" id="session-task-list" style="display: none;"></div>
         <div class="thinking-indicator" id="thinking-indicator" style="display: none;">
           <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span> ${i18n.t('session.statusThinking')}
@@ -1864,10 +2041,59 @@ function renderSessionPage(session) {
         thinkingEl.style.display = thinkingState.isThinking ? 'flex' : 'none';
       }
 
-      // Scroll to bottom of messages
+      // Scroll to bottom of messages (initial load only)
       container.scrollTop = container.scrollHeight;
+
+      // Add scroll listener to detect user scrolling
+      initScrollListener(container);
     }
   }, 100);
+}
+
+/**
+ * Initialize scroll listener to detect when user manually scrolls up
+ * This prevents auto-scroll from interrupting reading
+ */
+function initScrollListener(container) {
+  // Remove any existing listener first
+  if (container._scrollHandler) {
+    container.removeEventListener('scroll', container._scrollHandler);
+  }
+
+  // Reset scroll state when entering a session
+  userHasScrolledUp = false;
+
+  const scrollHandler = () => {
+    const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
+    const scrollBtn = document.getElementById('scroll-to-bottom-btn');
+
+    if (isAtBottom) {
+      // User scrolled back to bottom, release the lock
+      userHasScrolledUp = false;
+      if (scrollBtn) scrollBtn.style.display = 'none';
+    } else {
+      // User scrolled up, lock auto-scroll
+      userHasScrolledUp = true;
+      lastUserScrollTime = Date.now();
+      if (scrollBtn) scrollBtn.style.display = 'flex';
+    }
+  };
+
+  container._scrollHandler = scrollHandler;
+  container.addEventListener('scroll', scrollHandler);
+}
+
+/**
+ * Scroll to bottom of messages container and release scroll lock
+ */
+function scrollToBottom() {
+  const container = document.getElementById('messages-container');
+  if (container) {
+    container.scrollTop = container.scrollHeight;
+    userHasScrolledUp = false;
+    const scrollBtn = document.getElementById('scroll-to-bottom-btn');
+    if (scrollBtn) scrollBtn.style.display = 'none';
+  }
 }
 
 /**
@@ -1949,10 +2175,18 @@ function updateSessionPageIncremental(session) {
     emptyMsg.remove();
   }
 
-  // Restaurer/ajuster le scroll
-  if (hasNewMessages && wasAtBottom) {
+  // Restaurer/ajuster le scroll - respect user scroll state
+  // Check if scroll lock has expired
+  const scrollLockExpired = (Date.now() - lastUserScrollTime) > USER_SCROLL_LOCK_MS;
+
+  if (userHasScrolledUp && !scrollLockExpired) {
+    // User is reading history - preserve their scroll position
+    container.scrollTop = oldScrollTop;
+  } else if (hasNewMessages && wasAtBottom) {
+    // User was at bottom and there are new messages - scroll to show them
     container.scrollTop = container.scrollHeight;
   } else if (!hasNewMessages) {
+    // No new messages - keep position stable
     container.scrollTop = oldScrollTop;
   }
 
@@ -2551,6 +2785,11 @@ function renderSingleMessage(msg) {
   // Affichage spécial pour ExitPlanMode
   if (msg.role === 'assistant' && msg.toolUse && msg.toolUse.name === 'ExitPlanMode') {
     return renderPlanModeMessage(msg, uuid, 'exit');
+  }
+
+  // Cacher les messages user qui sont des prompts d'agents (spawned agents)
+  if (msg.role === 'user' && msg.isAgentPrompt === true) {
+    return ''; // Ne pas afficher ce message
   }
 
   const time = new Date(msg.timestamp).toLocaleTimeString('fr-FR');
@@ -3730,6 +3969,61 @@ async function showNewSessionModal() {
       </div>
 
       <div class="new-session-modal-body">
+        <!-- Session Type Selector -->
+        <div class="session-type-section">
+          <label>${i18n.t('newSessionModal.sessionType')}</label>
+          <div class="session-type-selector">
+            <label class="session-type-option selected" onclick="selectSessionType('classic')">
+              <input type="radio" name="session-type" value="classic" checked />
+              <div class="session-type-info">
+                <span class="session-type-name">${i18n.t('newSessionModal.sessionTypeClassic')}</span>
+                <span class="session-type-desc">${i18n.t('newSessionModal.sessionTypeClassicDesc')}</span>
+              </div>
+            </label>
+            <label class="session-type-option" onclick="selectSessionType('orchestrator')">
+              <input type="radio" name="session-type" value="orchestrator" />
+              <div class="session-type-info">
+                <span class="session-type-name">${i18n.t('newSessionModal.sessionTypeOrchestrator')}</span>
+                <span class="session-type-desc">${i18n.t('newSessionModal.sessionTypeOrchestratorDesc')}</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Orchestrator Options (hidden by default) -->
+        <div class="orchestrator-options hidden" id="orchestrator-options">
+          <div class="template-selector-section">
+            <label for="orchestrator-template">${i18n.t('newSessionModal.templateLabel')}</label>
+            <select id="orchestrator-template" class="template-selector" onchange="onTemplateSelected()">
+              <option value="">${i18n.t('newSessionModal.loadingTemplates')}</option>
+            </select>
+            <div class="template-description hidden" id="template-description">
+              <div class="template-description-text" id="template-description-text"></div>
+              <div class="template-tags" id="template-tags"></div>
+            </div>
+          </div>
+
+          <div class="advanced-options-toggle" onclick="toggleAdvancedOptions()">
+            <span class="advanced-options-label">${i18n.t('newSessionModal.advancedOptions')}</span>
+            <span class="advanced-options-icon">&#9660;</span>
+          </div>
+
+          <div class="advanced-options-content" id="advanced-options-content">
+            <div class="advanced-option-row">
+              <input type="checkbox" id="auto-spawn-workers" checked />
+              <label for="auto-spawn-workers">${i18n.t('newSessionModal.autoSpawnWorkers')}</label>
+            </div>
+            <div class="advanced-option-row">
+              <label for="max-workers">${i18n.t('newSessionModal.maxWorkersLabel')}</label>
+              <input type="number" id="max-workers" value="5" min="1" max="10" />
+            </div>
+            <div class="advanced-option-row">
+              <label>${i18n.t('newSessionModal.customVariables')}</label>
+              <button class="btn-edit-variables" onclick="showVariablesEditor()">${i18n.t('newSessionModal.editVariables')}</button>
+            </div>
+          </div>
+        </div>
+
         <div class="name-input-section">
           <label for="new-session-name">${i18n.t('newSessionModal.nameLabel')}</label>
           <div class="name-input-wrapper">
@@ -3832,6 +4126,393 @@ function hideNewSessionModal() {
   if (modal) {
     modal.remove();
   }
+}
+
+// ============================================================================
+// Orchestrator Session Functions
+// ============================================================================
+
+// Cache for templates
+let orchestratorTemplatesCache = null;
+
+// Custom variables for orchestrator session
+let orchestratorCustomVariables = {};
+
+/**
+ * Select session type (classic or orchestrator)
+ */
+function selectSessionType(type) {
+  const options = document.querySelectorAll('.session-type-option');
+  options.forEach(opt => {
+    const radio = opt.querySelector('input[type="radio"]');
+    if (radio.value === type) {
+      opt.classList.add('selected');
+      radio.checked = true;
+    } else {
+      opt.classList.remove('selected');
+      radio.checked = false;
+    }
+  });
+
+  toggleOrchestratorOptions();
+}
+
+/**
+ * Toggle orchestrator options visibility based on session type
+ */
+function toggleOrchestratorOptions() {
+  const orchestratorRadio = document.querySelector('input[name="session-type"][value="orchestrator"]');
+  const orchestratorOptions = document.getElementById('orchestrator-options');
+
+  if (!orchestratorRadio || !orchestratorOptions) return;
+
+  if (orchestratorRadio.checked) {
+    orchestratorOptions.classList.remove('hidden');
+    // Load templates if not already loaded
+    loadTemplates();
+  } else {
+    orchestratorOptions.classList.add('hidden');
+  }
+}
+
+/**
+ * Toggle advanced options visibility
+ */
+function toggleAdvancedOptions() {
+  const toggle = document.querySelector('.advanced-options-toggle');
+  const content = document.getElementById('advanced-options-content');
+
+  if (!toggle || !content) return;
+
+  toggle.classList.toggle('expanded');
+  content.classList.toggle('expanded');
+}
+
+/**
+ * Load templates for the dropdown
+ */
+async function loadTemplates() {
+  const select = document.getElementById('orchestrator-template');
+  if (!select) return;
+
+  // Use cache if available
+  if (orchestratorTemplatesCache) {
+    populateTemplateDropdown(orchestratorTemplatesCache);
+    return;
+  }
+
+  try {
+    const response = await apiRequest('/api/orchestrator/templates');
+    if (response.success && response.templates) {
+      orchestratorTemplatesCache = response.templates;
+      populateTemplateDropdown(response.templates);
+    } else {
+      select.innerHTML = `<option value="">${i18n.t('newSessionModal.noTemplatesAvailable')}</option>`;
+    }
+  } catch (error) {
+    console.error('Error loading templates:', error);
+    select.innerHTML = `<option value="">${i18n.t('newSessionModal.noTemplatesAvailable')}</option>`;
+  }
+}
+
+/**
+ * Map icon names to emojis
+ */
+const TEMPLATE_ICON_MAP = {
+  'book-open': '📖',
+  'book': '📚',
+  'cpu': '⚙️',
+  'code': '💻',
+  'terminal': '🖥️',
+  'file-text': '📄',
+  'folder': '📁',
+  'search': '🔍',
+  'settings': '⚙️',
+  'tool': '🔧',
+  'wrench': '🔧',
+  'puzzle': '🧩',
+  'lightning': '⚡',
+  'zap': '⚡',
+  'star': '⭐',
+  'heart': '❤️',
+  'check': '✅',
+  'alert': '⚠️',
+  'info': 'ℹ️',
+  'help': '❓',
+  'user': '👤',
+  'users': '👥',
+  'globe': '🌐',
+  'database': '🗄️',
+  'server': '🖧',
+  'cloud': '☁️',
+  'lock': '🔒',
+  'key': '🔑',
+  'rocket': '🚀',
+  'package': '📦',
+  'git': '🔀',
+  'bug': '🐛',
+  'test': '🧪',
+  'flask': '🧪',
+  'chart': '📊',
+  'clipboard': '📋',
+  'edit': '✏️',
+  'pen': '✏️',
+  'trash': '🗑️',
+  'download': '⬇️',
+  'upload': '⬆️',
+  'refresh': '🔄',
+  'play': '▶️',
+  'pause': '⏸️',
+  'stop': '⏹️'
+};
+
+/**
+ * Get emoji icon from icon name
+ */
+function getTemplateIcon(iconName) {
+  if (!iconName) return '';
+  // If already an emoji, return as-is
+  if (/\p{Emoji}/u.test(iconName)) return iconName;
+  return TEMPLATE_ICON_MAP[iconName] || '📄';
+}
+
+/**
+ * Populate template dropdown with templates data
+ */
+function populateTemplateDropdown(templates) {
+  const select = document.getElementById('orchestrator-template');
+  if (!select) return;
+
+  // Separate system and user templates
+  const systemTemplates = templates.filter(t => t.isSystem);
+  const userTemplates = templates.filter(t => !t.isSystem);
+
+  let html = `<option value="">${i18n.t('newSessionModal.templatePlaceholder')}</option>`;
+
+  if (systemTemplates.length > 0) {
+    html += `<optgroup label="${i18n.t('newSessionModal.templateSystemGroup')}">`;
+    systemTemplates.forEach(t => {
+      const icon = getTemplateIcon(t.icon);
+      html += `<option value="${escapeHtml(t.id)}" data-description="${escapeHtml(t.description || '')}" data-tags="${escapeHtml((t.tags || []).join(','))}">${icon} ${escapeHtml(t.name)}</option>`;
+    });
+    html += '</optgroup>';
+  }
+
+  if (userTemplates.length > 0) {
+    html += `<optgroup label="${i18n.t('newSessionModal.templateUserGroup')}">`;
+    userTemplates.forEach(t => {
+      const icon = getTemplateIcon(t.icon);
+      html += `<option value="${escapeHtml(t.id)}" data-description="${escapeHtml(t.description || '')}" data-tags="${escapeHtml((t.tags || []).join(','))}">${icon} ${escapeHtml(t.name)}</option>`;
+    });
+    html += '</optgroup>';
+  }
+
+  // Add manage templates option
+  html += `<optgroup label="">`;
+  html += `<option value="__manage__">${i18n.t('newSessionModal.templateManage')}</option>`;
+  html += '</optgroup>';
+
+  select.innerHTML = html;
+}
+
+/**
+ * Handle template selection
+ */
+function onTemplateSelected() {
+  const select = document.getElementById('orchestrator-template');
+  const descriptionBox = document.getElementById('template-description');
+  const descriptionText = document.getElementById('template-description-text');
+  const tagsContainer = document.getElementById('template-tags');
+
+  if (!select || !descriptionBox) return;
+
+  const selectedOption = select.options[select.selectedIndex];
+  const templateId = select.value;
+
+  // Handle manage templates option
+  if (templateId === '__manage__') {
+    select.value = '';
+    // TODO: Open template manager modal
+    showNewSessionNotification('Template manager coming soon!', 'info');
+    return;
+  }
+
+  if (templateId && selectedOption) {
+    const description = selectedOption.dataset.description || '';
+    const tags = (selectedOption.dataset.tags || '').split(',').filter(t => t);
+
+    if (description || tags.length > 0) {
+      descriptionBox.classList.remove('hidden');
+      descriptionText.textContent = description;
+
+      if (tags.length > 0) {
+        tagsContainer.innerHTML = tags.map(tag =>
+          `<span class="template-tag">${escapeHtml(tag)}</span>`
+        ).join('');
+      } else {
+        tagsContainer.innerHTML = '';
+      }
+    } else {
+      descriptionBox.classList.add('hidden');
+    }
+
+    // Reset custom variables when template changes
+    orchestratorCustomVariables = {};
+  } else {
+    descriptionBox.classList.add('hidden');
+  }
+}
+
+/**
+ * Show variables editor modal
+ */
+function showVariablesEditor() {
+  // Remove existing modal
+  const existing = document.getElementById('variables-editor-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'variables-editor-modal';
+  modal.className = 'variables-editor-modal';
+
+  // Generate variable rows from current state
+  const variableRows = Object.entries(orchestratorCustomVariables).map(([key, value], index) => `
+    <div class="variable-row" data-index="${index}">
+      <input type="text" class="variable-name" value="${escapeHtml(key)}" placeholder="${i18n.t('orchestratorVariables.variableName')}" />
+      <input type="text" class="variable-value" value="${escapeHtml(value)}" placeholder="${i18n.t('orchestratorVariables.variableValue')}" />
+      <button class="btn-remove-variable" onclick="removeVariableRow(${index})">x</button>
+    </div>
+  `).join('');
+
+  modal.innerHTML = `
+    <div class="variables-editor-content">
+      <div class="variables-editor-header">
+        <h3>${i18n.t('orchestratorVariables.title')}</h3>
+        <button onclick="hideVariablesEditor()" class="modal-close">x</button>
+      </div>
+      <div class="variables-editor-body">
+        <p class="variables-editor-description">${i18n.t('orchestratorVariables.description')}</p>
+        <div class="variables-list" id="variables-list">
+          ${variableRows}
+        </div>
+        <button class="btn-add-variable" onclick="addVariableRow()">+ ${i18n.t('orchestratorVariables.addVariable')}</button>
+      </div>
+      <div class="variables-editor-footer">
+        <button onclick="hideVariablesEditor()" class="btn btn-secondary">${i18n.t('orchestratorVariables.cancelBtn')}</button>
+        <button onclick="applyVariables()" class="btn btn-primary">${i18n.t('orchestratorVariables.applyBtn')}</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+}
+
+/**
+ * Hide variables editor modal
+ */
+function hideVariablesEditor() {
+  const modal = document.getElementById('variables-editor-modal');
+  if (modal) modal.remove();
+}
+
+/**
+ * Add a new variable row in the editor
+ */
+function addVariableRow() {
+  const list = document.getElementById('variables-list');
+  if (!list) return;
+
+  const index = list.children.length;
+  const row = document.createElement('div');
+  row.className = 'variable-row';
+  row.dataset.index = index;
+  row.innerHTML = `
+    <input type="text" class="variable-name" placeholder="${i18n.t('orchestratorVariables.variableName')}" />
+    <input type="text" class="variable-value" placeholder="${i18n.t('orchestratorVariables.variableValue')}" />
+    <button class="btn-remove-variable" onclick="removeVariableRow(${index})">x</button>
+  `;
+  list.appendChild(row);
+}
+
+/**
+ * Remove a variable row from the editor
+ */
+function removeVariableRow(index) {
+  const list = document.getElementById('variables-list');
+  if (!list) return;
+
+  const row = list.querySelector(`[data-index="${index}"]`);
+  if (row) row.remove();
+}
+
+/**
+ * Apply variables from the editor
+ */
+function applyVariables() {
+  const list = document.getElementById('variables-list');
+  if (!list) return;
+
+  const newVariables = {};
+  const rows = list.querySelectorAll('.variable-row');
+
+  rows.forEach(row => {
+    const nameInput = row.querySelector('.variable-name');
+    const valueInput = row.querySelector('.variable-value');
+    const name = nameInput?.value?.trim();
+    const value = valueInput?.value?.trim();
+
+    if (name) {
+      newVariables[name] = value || '';
+    }
+  });
+
+  orchestratorCustomVariables = newVariables;
+  hideVariablesEditor();
+}
+
+/**
+ * Create an orchestrator session
+ */
+async function createOrchestratorSession(templateId, cwd, message, options) {
+  try {
+    const response = await apiRequest('/api/orchestrator/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        cwd,
+        message,
+        options
+      })
+    });
+    return response;
+  } catch (error) {
+    console.error('Error creating orchestrator session:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get the current session type from the modal
+ */
+function getSelectedSessionType() {
+  const orchestratorRadio = document.querySelector('input[name="session-type"][value="orchestrator"]');
+  return orchestratorRadio?.checked ? 'orchestrator' : 'classic';
+}
+
+/**
+ * Get orchestrator options from the modal
+ */
+function getOrchestratorOptions() {
+  const templateSelect = document.getElementById('orchestrator-template');
+  const autoSpawnCheckbox = document.getElementById('auto-spawn-workers');
+  const maxWorkersInput = document.getElementById('max-workers');
+
+  return {
+    templateId: templateSelect?.value || '',
+    autoSpawn: autoSpawnCheckbox?.checked ?? true,
+    maxWorkers: parseInt(maxWorkersInput?.value, 10) || 5,
+    variables: { ...orchestratorCustomVariables }
+  };
 }
 
 /**
@@ -4024,6 +4705,7 @@ async function createNewSessionFromModal() {
   const sessionName = nameInput.value.trim();
   const cwd = pathInput.value.trim();
   const message = messageInput.value.trim();
+  const sessionType = getSelectedSessionType();
 
   if (!sessionName) {
     showNewSessionNotification('Veuillez entrer un nom pour la session', 'error');
@@ -4043,22 +4725,51 @@ async function createNewSessionFromModal() {
     return;
   }
 
+  // Validation for orchestrator sessions
+  if (sessionType === 'orchestrator') {
+    const orchestratorOpts = getOrchestratorOptions();
+    if (!orchestratorOpts.templateId) {
+      showNewSessionNotification(i18n.t('newSessionModal.templatePlaceholder'), 'error');
+      return;
+    }
+  }
+
   // Désactiver le bouton pendant la création
   if (createBtn) {
     createBtn.disabled = true;
-    createBtn.innerHTML = '⏳ Création en cours...';
+    createBtn.innerHTML = sessionType === 'orchestrator'
+      ? `⏳ ${i18n.t('newSessionModal.orchestratorCreating')}`
+      : '⏳ Création en cours...';
   }
 
   try {
-    // Envoyer le nom de session via les options
-    const response = await apiRequest('/api/new-session', {
-      method: 'POST',
-      body: JSON.stringify({
+    let response;
+
+    if (sessionType === 'orchestrator') {
+      // Create orchestrator session
+      const orchestratorOpts = getOrchestratorOptions();
+      response = await createOrchestratorSession(
+        orchestratorOpts.templateId,
         cwd,
         message,
-        options: { title: sessionName }
-      })
-    });
+        {
+          title: sessionName,
+          autoSpawn: orchestratorOpts.autoSpawn,
+          maxWorkers: orchestratorOpts.maxWorkers,
+          variables: orchestratorOpts.variables
+        }
+      );
+    } else {
+      // Create classic session
+      response = await apiRequest('/api/new-session', {
+        method: 'POST',
+        body: JSON.stringify({
+          cwd,
+          message,
+          options: { title: sessionName }
+        })
+      });
+    }
 
     if (response.success) {
       // Ajouter aux récents
@@ -4067,12 +4778,18 @@ async function createNewSessionFromModal() {
       // Fermer le modal
       hideNewSessionModal();
 
+      // Reset orchestrator state
+      orchestratorCustomVariables = {};
+
       // Récupérer le sessionId
-      const sessionId = response.session?.sessionId;
+      const sessionId = response.session?.sessionId || response.orchestrator?.mainSessionId;
 
       if (sessionId) {
         // Notification immédiate avec le nom choisi par l'utilisateur
-        showNewSessionNotification(`Session "${sessionName}" créée!`, 'success');
+        const successMsg = sessionType === 'orchestrator'
+          ? i18n.t('newSessionModal.orchestratorCreated')
+          : `Session "${sessionName}" créée!`;
+        showNewSessionNotification(successMsg, 'success');
 
         // Recharger les sessions et naviguer vers la nouvelle session
         await loadSessions();
@@ -4080,14 +4797,20 @@ async function createNewSessionFromModal() {
         goToSession(sessionId);
       } else {
         // Pas de sessionId, comportement fallback
-        showNewSessionNotification(i18n.t('newSessionModal.sessionCreated'), 'success');
+        const successMsg = sessionType === 'orchestrator'
+          ? i18n.t('newSessionModal.orchestratorCreated')
+          : i18n.t('newSessionModal.sessionCreated');
+        showNewSessionNotification(successMsg, 'success');
         setTimeout(async () => {
           await loadSessions();
           renderHomePage();
         }, 1500);
       }
     } else {
-      showNewSessionNotification(response.error || i18n.t('newSessionModal.errorCreating'), 'error');
+      const errorMsg = sessionType === 'orchestrator'
+        ? i18n.t('newSessionModal.orchestratorError')
+        : i18n.t('newSessionModal.errorCreating');
+      showNewSessionNotification(response.error || errorMsg, 'error');
     }
   } catch (error) {
     console.error('Erreur création session:', error);
@@ -4095,7 +4818,7 @@ async function createNewSessionFromModal() {
   } finally {
     if (createBtn) {
       createBtn.disabled = false;
-      createBtn.innerHTML = '🚀 Lancer la session';
+      createBtn.innerHTML = i18n.t('newSessionModal.launchBtn');
     }
   }
 }
@@ -4198,13 +4921,29 @@ function getToolInputPreview(tool) {
 function formatMessage(content) {
   if (!content) return '';
 
+  // Hide orchestrator protocol markers and their content
+  // Pattern: <<<MARKER_NAME>>> ... <<<END_MARKER_NAME>>> or just <<<MARKER_NAME>>>
+  let cleaned = content;
+
+  // Remove complete orchestrator blocks (with content between markers)
+  cleaned = cleaned.replace(/<<<ORCHESTRATOR_RESPONSE>>>[\s\S]*?<<<END_ORCHESTRATOR_RESPONSE>>>/g, '');
+
+  // Remove any remaining standalone markers (in case of incomplete blocks)
+  cleaned = cleaned.replace(/<<<[A-Z_]+>>>/g, '');
+
+  // Clean up excessive whitespace left after removal
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+  // If everything was stripped, return empty
+  if (!cleaned) return '';
+
   // Utiliser des placeholders uniques qui ne seront pas affectés par escapeHtml ou le parsing Markdown
   const PLACEHOLDER_PREFIX = '\u0000CODEBLOCK';
   const INLINE_PREFIX = '\u0000INLINECODE';
 
   // Sauvegarder les blocs de code pour les protéger du parsing
   const codeBlocks = [];
-  let formatted = content.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+  let formatted = cleaned.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
     const index = codeBlocks.length;
     codeBlocks.push({ lang, code: escapeHtml(code.trim()) });
     return `${PLACEHOLDER_PREFIX}${index}\u0000`;
@@ -4770,6 +5509,14 @@ async function submitPin() {
 
       // CRITICAL: Attacher l'event listener hashchange (sinon routing ne marche pas!)
       window.addEventListener('hashchange', handleRouteChange);
+
+      // Check for auth redirect (from orchestrator.html or other pages)
+      const authRedirect = new URLSearchParams(window.location.search).get('authRedirect');
+      if (authRedirect) {
+        // Clean redirect URL and navigate
+        window.location.href = decodeURIComponent(authRedirect);
+        return;
+      }
     } else {
       // Echec
       errorDiv.textContent = data.message || i18n.t('pinLogin.incorrectPin');
@@ -5361,3 +6108,964 @@ window.selectQuestionOption = selectQuestionOption;
 window.showCustomInput = showCustomInput;
 window.confirmCustomAnswer = confirmCustomAnswer;
 window.submitQuestionAnswers = submitQuestionAnswers;
+
+// ============================================================================
+// Orchestrator Dashboard Support
+// ============================================================================
+
+// Orchestrator state
+let currentOrchestrator = null;
+let orchestratorPollingInterval = null;
+const ORCHESTRATOR_POLLING_MS = 2000;
+let activeOrchestratorTab = 'messages'; // Default tab: 'messages', 'workers', 'stats'
+
+/**
+ * Check if a session is an orchestrator session
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<Object|null>} Orchestrator data or null
+ */
+async function checkOrchestratorSession(sessionId) {
+  try {
+    // Strategy 1: Check if sessionId contains orchestrator ID pattern (for worker sessions)
+    if (sessionId.includes('_orch_')) {
+      return await findOrchestratorForSession(sessionId);
+    }
+
+    // Strategy 2: Check if this session is a mainSession of an orchestrator
+    // Use a direct fetch to avoid triggering re-login on 401/404 errors
+    // (orchestrator might not exist after server restart - that's expected)
+    console.log('[Orchestrator] Checking session:', sessionId, 'isAuthenticated:', isAuthenticated, 'hasToken:', !!sessionToken);
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (sessionToken) {
+      headers['X-Session-Token'] = sessionToken;
+    }
+
+    const bySessionResponse = await fetch(`${API_BASE}/api/orchestrator/by-session/${sessionId}`, { headers });
+
+    // 404 means no orchestrator found - that's fine, just return null
+    if (bySessionResponse.status === 404) {
+      console.log('[Orchestrator] No orchestrator found for session:', sessionId);
+      return null;
+    }
+
+    // 401 means auth failed - log it but don't trigger re-login for this check
+    if (bySessionResponse.status === 401) {
+      console.warn('[Orchestrator] Auth failed checking orchestrator for session:', sessionId);
+      return null;
+    }
+
+    const response = await bySessionResponse.json();
+    if (response.success && response.orchestratorId) {
+      // Load full orchestrator details using apiRequest (this can trigger re-login if needed)
+      const fullResponse = await apiRequest(`/api/orchestrator/${response.orchestratorId}`);
+      if (fullResponse.success) {
+        return fullResponse.orchestrator;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    // Network error or other unexpected error
+    console.error('[Orchestrator] Error checking orchestrator session:', error);
+    return null;
+  }
+}
+
+/**
+ * Find orchestrator for a given session
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<Object|null>} Orchestrator data or null
+ */
+async function findOrchestratorForSession(sessionId) {
+  try {
+    // Try direct orchestrator lookup if sessionId contains orchestrator ID
+    const match = sessionId.match(/orch_([a-zA-Z0-9]+)/);
+    if (match) {
+      const orchId = `orch_${match[1]}`;
+      const response = await apiRequest(`/api/orchestrator/${orchId}`);
+      if (response.success && response.orchestrator) {
+        return response.orchestrator;
+      }
+    }
+    return null;
+  } catch (error) {
+    // Not found or error
+    return null;
+  }
+}
+
+/**
+ * Load orchestrator details by ID
+ * @param {string} orchestratorId - Orchestrator ID
+ * @returns {Promise<Object>} Orchestrator data
+ */
+async function loadOrchestratorDetails(orchestratorId) {
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}`);
+    if (response.success) {
+      currentOrchestrator = response.orchestrator;
+      return response.orchestrator;
+    }
+    throw new Error(response.message || 'Failed to load orchestrator');
+  } catch (error) {
+    console.error('[Orchestrator] Error loading details:', error);
+    throw error;
+  }
+}
+
+/**
+ * Load orchestrator status (lightweight)
+ * @param {string} orchestratorId - Orchestrator ID
+ * @returns {Promise<Object>} Status data
+ */
+async function loadOrchestratorStatus(orchestratorId) {
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}/status`);
+    if (response.success) {
+      return response.status;
+    }
+    throw new Error(response.message || 'Failed to load status');
+  } catch (error) {
+    console.error('[Orchestrator] Error loading status:', error);
+    throw error;
+  }
+}
+
+/**
+ * Start polling for orchestrator updates
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+function startOrchestratorPolling(orchestratorId) {
+  if (orchestratorPollingInterval) {
+    clearInterval(orchestratorPollingInterval);
+  }
+
+  orchestratorPollingInterval = setInterval(async () => {
+    // FIX: Vérifier qu'on est toujours sur la bonne session orchestrator
+    // avant de faire des requêtes et mettre à jour le dashboard
+    if (getCurrentRoute() !== 'session' || !currentOrchestrator || currentOrchestrator.id !== orchestratorId) {
+      console.log('[Orchestrator] Polling arrêté: route ou orchestrator a changé');
+      stopOrchestratorPolling();
+      return;
+    }
+
+    try {
+      const orch = await loadOrchestratorDetails(orchestratorId);
+      if (orch) {
+        // Also reload session messages to show Claude's activity
+        if (orch.mainSessionId) {
+          try {
+            const messagesData = await apiRequest(`/api/session/${orch.mainSessionId}/messages?offset=0&limit=100`);
+            updateOrchestratorDashboard(orch, messagesData.messages || []);
+          } catch (msgError) {
+            // If messages fail, still update with orchestrator data
+            updateOrchestratorDashboard(orch, null);
+          }
+        } else {
+          updateOrchestratorDashboard(orch, null);
+        }
+      }
+    } catch (error) {
+      console.error('[Orchestrator] Polling error:', error);
+    }
+  }, ORCHESTRATOR_POLLING_MS);
+}
+
+/**
+ * Stop orchestrator polling
+ */
+function stopOrchestratorPolling() {
+  if (orchestratorPollingInterval) {
+    clearInterval(orchestratorPollingInterval);
+    orchestratorPollingInterval = null;
+  }
+}
+
+/**
+ * Render orchestrator dashboard header
+ * @param {Object} orchestrator - Orchestrator data
+ * @returns {string} HTML string
+ */
+function renderOrchestratorHeader(orchestrator) {
+  const { id, templateId, status, currentPhase, stats, tasks, workers } = orchestrator;
+
+  // Calculate progress
+  const workersList = Object.values(workers || {});
+  const totalTasks = tasks?.length || 0;
+  const completedTasks = workersList.filter(w => w.status === 'completed').length;
+  const runningTasks = workersList.filter(w => ['running', 'spawning'].includes(w.status)).length;
+  const pendingTasks = workersList.filter(w => w.status === 'pending').length;
+  const failedTasks = workersList.filter(w => ['failed', 'timeout', 'cancelled'].includes(w.status)).length;
+
+  const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+  // Status labels
+  const statusLabels = {
+    'created': 'Created',
+    'analyzing': 'Analyzing...',
+    'planning': 'Planning Tasks...',
+    'confirming': 'Awaiting Confirmation',
+    'spawning': 'Spawning Workers',
+    'running': 'Running',
+    'aggregating': 'Aggregating Results',
+    'verifying': 'Verifying',
+    'completed': 'Completed',
+    'error': 'Error',
+    'cancelled': 'Cancelled',
+    'paused': 'Paused'
+  };
+
+  // Phase labels
+  const phaseLabels = {
+    'analysis': 'Analysis',
+    'taskPlanning': 'Task Planning',
+    'workerExecution': 'Worker Execution',
+    'aggregation': 'Aggregation',
+    'verification': 'Verification'
+  };
+
+  // Status colors
+  const statusColors = {
+    'created': 'status-idle',
+    'analyzing': 'status-thinking',
+    'planning': 'status-thinking',
+    'confirming': 'status-waiting',
+    'spawning': 'status-thinking',
+    'running': 'status-thinking',
+    'aggregating': 'status-thinking',
+    'verifying': 'status-thinking',
+    'completed': 'status-completed',
+    'error': 'status-error',
+    'cancelled': 'status-cancelled',
+    'paused': 'status-waiting'
+  };
+
+  return `
+    <div class="orchestrator-header">
+      <div class="orchestrator-title">
+        <span class="orchestrator-icon">🎯</span>
+        <span class="orchestrator-name">Orchestrator: ${escapeHtml(templateId || 'Unknown')}</span>
+      </div>
+      <div class="orchestrator-meta">
+        <span class="orchestrator-meta-item">
+          <strong>Template:</strong> ${escapeHtml(templateId || 'N/A')}
+        </span>
+        <span class="orchestrator-meta-item">
+          <strong>Status:</strong>
+          <span class="session-badge ${statusColors[status] || 'status-idle'}">${statusLabels[status] || status}</span>
+        </span>
+        <span class="orchestrator-meta-item">
+          <strong>Phase:</strong> ${phaseLabels[currentPhase] || currentPhase}
+        </span>
+      </div>
+      <div class="orchestrator-progress">
+        <div class="orchestrator-progress-info">
+          <span class="progress-label">Progress:</span>
+          <span class="progress-percent">${progressPercent}%</span>
+          <span class="progress-tasks">(${completedTasks}/${totalTasks} tasks)</span>
+        </div>
+        <div class="orchestrator-progress-bar">
+          <div class="orchestrator-progress-fill" style="width: ${progressPercent}%;"></div>
+        </div>
+        <div class="orchestrator-progress-summary">
+          ${runningTasks > 0 ? `<span class="progress-running">${runningTasks} running</span>` : ''}
+          ${pendingTasks > 0 ? `<span class="progress-pending">${pendingTasks} pending</span>` : ''}
+          ${failedTasks > 0 ? `<span class="progress-failed">${failedTasks} failed</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render orchestrator tabs
+ * @param {string} activeTab - Currently active tab
+ * @returns {string} HTML string
+ */
+function renderOrchestratorTabs(activeTab) {
+  return `
+    <div class="orchestrator-tabs">
+      <button class="orchestrator-tab ${activeTab === 'messages' ? 'active' : ''}"
+              onclick="switchOrchestratorTab('messages')">
+        💬 Messages
+      </button>
+      <button class="orchestrator-tab ${activeTab === 'workers' ? 'active' : ''}"
+              onclick="switchOrchestratorTab('workers')">
+        👷 Workers
+      </button>
+      <button class="orchestrator-tab ${activeTab === 'stats' ? 'active' : ''}"
+              onclick="switchOrchestratorTab('stats')">
+        📊 Stats
+      </button>
+    </div>
+  `;
+}
+
+/**
+ * Switch orchestrator tab
+ * @param {string} tab - Tab to switch to
+ */
+function switchOrchestratorTab(tab) {
+  activeOrchestratorTab = tab;
+
+  // Update tab active state
+  document.querySelectorAll('.orchestrator-tab').forEach(el => {
+    el.classList.toggle('active', el.textContent.toLowerCase().includes(tab));
+  });
+
+  // Show/hide content panels
+  document.querySelectorAll('.orchestrator-content').forEach(el => {
+    el.style.display = 'none';
+  });
+
+  const activeContent = document.getElementById(`orchestrator-${tab}`);
+  if (activeContent) {
+    activeContent.style.display = 'block';
+  }
+}
+
+/**
+ * Render workers list
+ * @param {Object} orchestrator - Orchestrator data
+ * @returns {string} HTML string
+ */
+function renderWorkersList(orchestrator) {
+  const { tasks, workers } = orchestrator;
+
+  if (!tasks || tasks.length === 0) {
+    return `
+      <div class="workers-empty">
+        <p>No tasks have been created yet.</p>
+        <p>The orchestrator is still in the analysis phase.</p>
+      </div>
+    `;
+  }
+
+  const workerCards = tasks.map(task => {
+    const worker = workers?.[task.id] || {};
+    return renderWorkerCard(task, worker);
+  }).join('');
+
+  const completedCount = Object.values(workers || {}).filter(w => w.status === 'completed').length;
+  const totalCount = tasks.length;
+
+  return `
+    <div class="workers-container">
+      <div class="workers-header">
+        <span class="workers-count">Workers (${completedCount}/${totalCount})</span>
+        <div class="workers-actions">
+          ${orchestrator.status === 'running' ? `
+            <button class="btn btn-small btn-secondary" onclick="pauseAllWorkers('${orchestrator.id}')">
+              ⏸️ Pause All
+            </button>
+          ` : ''}
+          ${orchestrator.status === 'paused' ? `
+            <button class="btn btn-small btn-primary" onclick="resumeOrchestrator('${orchestrator.id}')">
+              ▶️ Resume
+            </button>
+          ` : ''}
+        </div>
+      </div>
+      <div class="workers-list">
+        ${workerCards}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render a single worker card
+ * @param {Object} task - Task definition
+ * @param {Object} worker - Worker state
+ * @returns {string} HTML string
+ */
+function renderWorkerCard(task, worker) {
+  const status = worker.status || 'pending';
+  const progress = worker.progress || 0;
+  const toolStats = worker.toolStats || {};
+
+  // Status icons
+  const statusIcons = {
+    'pending': '⏸️',
+    'spawning': '🚀',
+    'running': '🔄',
+    'completed': '✅',
+    'failed': '❌',
+    'timeout': '⏰',
+    'cancelled': '🚫'
+  };
+
+  // Format tool stats
+  const reads = toolStats.read || toolStats.Read || 0;
+  const edits = toolStats.edit || toolStats.Edit || 0;
+  const writes = toolStats.write || toolStats.Write || 0;
+  const bash = toolStats.bash || toolStats.Bash || 0;
+  const grep = toolStats.grep || toolStats.Grep || 0;
+
+  // Calculate elapsed time
+  let elapsedTime = '';
+  if (worker.startedAt) {
+    const start = new Date(worker.startedAt);
+    const end = worker.completedAt ? new Date(worker.completedAt) : new Date();
+    const diffMs = end - start;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffSecs = Math.floor((diffMs % 60000) / 1000);
+    elapsedTime = diffMins > 0 ? `${diffMins}m ${diffSecs}s` : `${diffSecs}s`;
+    if (status === 'running') elapsedTime += '...';
+  }
+
+  return `
+    <div class="worker-card ${status}" data-task-id="${task.id}">
+      <div class="worker-card-header">
+        <span class="worker-status-icon">${statusIcons[status] || '⏸️'}</span>
+        <span class="worker-task-id">${escapeHtml(task.id)}: ${escapeHtml(task.title || 'Untitled')}</span>
+        ${status === 'pending' && task.dependencies?.length > 0 ? `
+          <span class="worker-waiting">[Waiting: ${task.dependencies.length} task${task.dependencies.length > 1 ? 's' : ''}]</span>
+        ` : ''}
+      </div>
+
+      <div class="worker-progress-bar">
+        <div class="worker-progress-fill ${status}" style="width: ${progress}%;"></div>
+      </div>
+      <div class="worker-progress-text">${progress}%</div>
+
+      ${reads || edits || writes || elapsedTime ? `
+        <div class="worker-stats">
+          ${reads > 0 ? `<span class="stat-item">📄 ${reads} reads</span>` : ''}
+          ${edits > 0 ? `<span class="stat-item">🔧 ${edits} edits</span>` : ''}
+          ${writes > 0 ? `<span class="stat-item">📝 ${writes} writes</span>` : ''}
+          ${bash > 0 ? `<span class="stat-item">💻 ${bash} bash</span>` : ''}
+          ${elapsedTime ? `<span class="stat-item">⏱️ ${elapsedTime}</span>` : ''}
+        </div>
+      ` : ''}
+
+      ${worker.currentAction ? `
+        <div class="worker-current-action">
+          Current: ${escapeHtml(worker.currentAction)}
+        </div>
+      ` : ''}
+
+      <div class="worker-actions">
+        ${status === 'running' ? `
+          <button class="btn btn-small btn-secondary" onclick="pauseWorker('${task.id}')">Pause</button>
+        ` : ''}
+        ${status === 'failed' || status === 'timeout' ? `
+          <button class="btn btn-small btn-primary" onclick="retryWorker('${task.id}')">Retry</button>
+        ` : ''}
+        <button class="btn btn-small btn-icon" onclick="toggleWorkerDetail('${task.id}')">▶</button>
+      </div>
+
+      <div class="worker-detail" id="worker-detail-${task.id}" style="display: none;">
+        <div class="worker-detail-content">
+          <div class="detail-section">
+            <strong>Task Definition:</strong>
+            <div class="detail-box">
+              <div><strong>Title:</strong> ${escapeHtml(task.title || 'N/A')}</div>
+              <div><strong>Description:</strong> ${escapeHtml(task.description || 'N/A')}</div>
+              ${task.scope ? `<div><strong>Scope:</strong> ${escapeHtml(Array.isArray(task.scope) ? task.scope.join(', ') : task.scope)}</div>` : ''}
+              ${task.dependencies?.length > 0 ? `<div><strong>Dependencies:</strong> ${task.dependencies.join(', ')}</div>` : ''}
+            </div>
+          </div>
+
+          ${worker.sessionId ? `
+            <div class="detail-section">
+              <strong>Session:</strong>
+              <a href="#session/${worker.sessionId}" class="worker-session-link">${worker.sessionId}</a>
+              <button class="btn btn-small btn-icon" onclick="window.open('#session/${worker.sessionId}', '_blank')">🔗</button>
+            </div>
+          ` : ''}
+
+          <div class="detail-actions">
+            ${['running', 'pending'].includes(status) ? `
+              <button class="btn btn-small btn-danger" onclick="cancelWorker('${task.id}')">Cancel Worker</button>
+            ` : ''}
+            ${['failed', 'timeout', 'cancelled'].includes(status) ? `
+              <button class="btn btn-small btn-primary" onclick="retryWorker('${task.id}')">Retry</button>
+            ` : ''}
+            ${worker.sessionId ? `
+              <button class="btn btn-small btn-secondary" onclick="goToSession('${worker.sessionId}')">View Session</button>
+            ` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Toggle worker detail panel
+ * @param {string} taskId - Task ID
+ */
+function toggleWorkerDetail(taskId) {
+  const detail = document.getElementById(`worker-detail-${taskId}`);
+  const btn = document.querySelector(`[data-task-id="${taskId}"] .btn-icon`);
+
+  if (detail) {
+    const isHidden = detail.style.display === 'none';
+    detail.style.display = isHidden ? 'block' : 'none';
+    if (btn) {
+      btn.textContent = isHidden ? '▼' : '▶';
+    }
+  }
+}
+
+/**
+ * Render stats tab content
+ * @param {Object} orchestrator - Orchestrator data
+ * @returns {string} HTML string
+ */
+function renderOrchestratorStats(orchestrator) {
+  const { stats, workers, tasks, createdAt, startedAt, completedAt } = orchestrator;
+
+  // Calculate tool totals from all workers
+  let totalTools = 0;
+  let toolBreakdown = {
+    read: 0,
+    edit: 0,
+    write: 0,
+    grep: 0,
+    glob: 0,
+    bash: 0
+  };
+
+  Object.values(workers || {}).forEach(worker => {
+    const ts = worker.toolStats || {};
+    toolBreakdown.read += ts.read || ts.Read || 0;
+    toolBreakdown.edit += ts.edit || ts.Edit || 0;
+    toolBreakdown.write += ts.write || ts.Write || 0;
+    toolBreakdown.grep += ts.grep || ts.Grep || 0;
+    toolBreakdown.glob += ts.glob || ts.Glob || 0;
+    toolBreakdown.bash += ts.bash || ts.Bash || 0;
+  });
+
+  totalTools = Object.values(toolBreakdown).reduce((a, b) => a + b, 0);
+
+  // Calculate time statistics
+  const startTime = startedAt ? new Date(startedAt) : null;
+  const endTime = completedAt ? new Date(completedAt) : new Date();
+  let elapsed = '';
+  if (startTime) {
+    const diffMs = endTime - startTime;
+    const mins = Math.floor(diffMs / 60000);
+    const secs = Math.floor((diffMs % 60000) / 1000);
+    elapsed = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  }
+
+  // Calculate tool percentages
+  const getPercent = (val) => totalTools > 0 ? Math.round((val / totalTools) * 100) : 0;
+
+  return `
+    <div class="stats-container">
+      <div class="stats-section">
+        <h4>Aggregated Statistics</h4>
+        <div class="stats-box">
+          <div class="stats-total">Total Tool Uses: ${totalTools}</div>
+          <div class="stats-breakdown">
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">📖 Read</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.read)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.read} (${getPercent(toolBreakdown.read)}%)</span>
+            </div>
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">✏️ Edit</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.edit)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.edit} (${getPercent(toolBreakdown.edit)}%)</span>
+            </div>
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">📝 Write</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.write)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.write} (${getPercent(toolBreakdown.write)}%)</span>
+            </div>
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">🔍 Grep</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.grep)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.grep} (${getPercent(toolBreakdown.grep)}%)</span>
+            </div>
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">📁 Glob</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.glob)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.glob} (${getPercent(toolBreakdown.glob)}%)</span>
+            </div>
+            <div class="stat-bar-item">
+              <span class="stat-bar-label">💻 Bash</span>
+              <div class="stat-bar">
+                <div class="stat-bar-fill" style="width: ${getPercent(toolBreakdown.bash)}%;"></div>
+              </div>
+              <span class="stat-bar-value">${toolBreakdown.bash} (${getPercent(toolBreakdown.bash)}%)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-section">
+        <h4>Time Statistics</h4>
+        <div class="stats-box">
+          <div class="stats-row">
+            <span class="stats-label">Started:</span>
+            <span class="stats-value">${startTime ? startTime.toLocaleString() : 'Not started'}</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Elapsed:</span>
+            <span class="stats-value">${elapsed || 'N/A'}</span>
+          </div>
+          ${completedAt ? `
+            <div class="stats-row">
+              <span class="stats-label">Completed:</span>
+              <span class="stats-value">${new Date(completedAt).toLocaleString()}</span>
+            </div>
+          ` : ''}
+          <div class="stats-row">
+            <span class="stats-label">Tasks:</span>
+            <span class="stats-value">${tasks?.length || 0} total</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render orchestrator dashboard page
+ * @param {Object} session - Session data
+ * @param {Object} orchestrator - Orchestrator data
+ */
+function renderOrchestratorDashboard(session, orchestrator) {
+  currentOrchestrator = orchestrator;
+
+  const isRunning = ['analyzing', 'planning', 'spawning', 'running', 'aggregating'].includes(orchestrator.status);
+
+  const messages = session.messages || [];
+  // Skip the first message (orchestrator system prompt) - it's internal
+  const visibleMessages = messages.slice(1);
+  const messagesHTML = visibleMessages.map(msg => renderSingleMessage(msg)).join('');
+
+  appContent.innerHTML = `
+    <div class="session-detail orchestrator-session">
+      ${renderOrchestratorHeader(orchestrator)}
+
+      <div class="card orchestrator-card">
+        ${renderOrchestratorTabs(activeOrchestratorTab)}
+
+        <div class="orchestrator-content" id="orchestrator-messages"
+             style="display: ${activeOrchestratorTab === 'messages' ? 'block' : 'none'};">
+          <div class="messages-container" id="messages-container">
+            ${messagesHTML.length > 0 ? messagesHTML : '<p class="info-message">No messages yet</p>'}
+          </div>
+        </div>
+
+        <div class="orchestrator-content" id="orchestrator-workers"
+             style="display: ${activeOrchestratorTab === 'workers' ? 'block' : 'none'};">
+          ${renderWorkersList(orchestrator)}
+        </div>
+
+        <div class="orchestrator-content" id="orchestrator-stats"
+             style="display: ${activeOrchestratorTab === 'stats' ? 'block' : 'none'};">
+          ${renderOrchestratorStats(orchestrator)}
+        </div>
+      </div>
+
+      <div class="card session-actions-card" id="session-actions-card">
+        <h3>Orchestrator Actions</h3>
+        <div class="orchestrator-action-buttons">
+          ${orchestrator.status === 'confirming' ? `
+            <button class="btn btn-primary" onclick="confirmOrchestratorTasks('${orchestrator.id}')">
+              ✅ Confirm & Start Workers
+            </button>
+          ` : ''}
+          ${orchestrator.status === 'paused' ? `
+            <button class="btn btn-primary" onclick="resumeOrchestrator('${orchestrator.id}')">
+              ▶️ Resume
+            </button>
+          ` : ''}
+          ${['analyzing', 'planning', 'spawning', 'running', 'aggregating'].includes(orchestrator.status) ? `
+            <button class="btn btn-secondary" onclick="pauseOrchestrator('${orchestrator.id}')">
+              ⏸️ Pause
+            </button>
+          ` : ''}
+          ${!['completed', 'cancelled'].includes(orchestrator.status) ? `
+            <button class="btn btn-danger" onclick="cancelOrchestrator('${orchestrator.id}')">
+              ❌ Cancel
+            </button>
+          ` : ''}
+          <button class="btn btn-secondary" onclick="refreshOrchestratorDashboard()">
+            🔄 Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Start polling if orchestrator is running
+  if (isRunning) {
+    startOrchestratorPolling(orchestrator.id);
+  } else {
+    stopOrchestratorPolling();
+  }
+}
+
+/**
+ * Update orchestrator dashboard without full re-render
+ * @param {Object} orchestrator - Orchestrator data
+ * @param {Array|null} messages - Session messages (optional)
+ */
+function updateOrchestratorDashboard(orchestrator, messages = null) {
+  // Update current orchestrator reference
+  currentOrchestrator = orchestrator;
+
+  // Update header
+  const headerEl = document.querySelector('.orchestrator-header');
+  if (headerEl) {
+    headerEl.outerHTML = renderOrchestratorHeader(orchestrator);
+  }
+
+  // Update messages if on messages tab and messages provided
+  if (activeOrchestratorTab === 'messages' && messages) {
+    const messagesContainer = document.getElementById('messages-container');
+    if (messagesContainer) {
+      // Skip the first message (orchestrator system prompt) - it's internal
+      const visibleMessages = messages.slice(1);
+      const messagesHTML = visibleMessages.map(msg => renderSingleMessage(msg)).join('');
+      messagesContainer.innerHTML = messagesHTML.length > 0 ? messagesHTML : '<p class="info-message">No messages yet</p>';
+
+      // Auto-scroll to bottom to show latest activity
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }
+
+  // Update workers list if on workers tab
+  if (activeOrchestratorTab === 'workers') {
+    const workersEl = document.getElementById('orchestrator-workers');
+    if (workersEl) {
+      workersEl.innerHTML = renderWorkersList(orchestrator);
+    }
+  }
+
+  // Update stats if on stats tab
+  if (activeOrchestratorTab === 'stats') {
+    const statsEl = document.getElementById('orchestrator-stats');
+    if (statsEl) {
+      statsEl.innerHTML = renderOrchestratorStats(orchestrator);
+    }
+  }
+
+  // Check if orchestrator completed/errored/cancelled
+  if (['completed', 'error', 'cancelled'].includes(orchestrator.status)) {
+    stopOrchestratorPolling();
+    showOrchestratorNotification(orchestrator);
+  }
+}
+
+/**
+ * Show notification for orchestrator state change
+ * @param {Object} orchestrator - Orchestrator data
+ */
+function showOrchestratorNotification(orchestrator) {
+  const messages = {
+    'completed': 'Orchestration complete! All tasks finished.',
+    'error': 'Orchestration encountered an error.',
+    'cancelled': 'Orchestration was cancelled.'
+  };
+
+  const types = {
+    'completed': 'success',
+    'error': 'error',
+    'cancelled': 'info'
+  };
+
+  const message = messages[orchestrator.status] || `Orchestrator status: ${orchestrator.status}`;
+  showInjectionNotification(message, types[orchestrator.status] || 'info');
+}
+
+/**
+ * Confirm tasks and spawn workers
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+async function confirmOrchestratorTasks(orchestratorId) {
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}/confirm-tasks`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+
+    if (response.success) {
+      showInjectionNotification(`Workers spawned: ${response.workersCreated}`, 'success');
+      refreshOrchestratorDashboard();
+    } else {
+      showInjectionNotification(response.message || 'Failed to confirm tasks', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Pause orchestrator
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+async function pauseOrchestrator(orchestratorId) {
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}/pause`, {
+      method: 'POST'
+    });
+
+    if (response.success) {
+      showInjectionNotification('Orchestrator paused', 'info');
+      refreshOrchestratorDashboard();
+    } else {
+      showInjectionNotification(response.message || 'Failed to pause', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Resume orchestrator
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+async function resumeOrchestrator(orchestratorId) {
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}/resume`, {
+      method: 'POST'
+    });
+
+    if (response.success) {
+      showInjectionNotification('Orchestrator resumed', 'success');
+      refreshOrchestratorDashboard();
+      startOrchestratorPolling(orchestratorId);
+    } else {
+      showInjectionNotification(response.message || 'Failed to resume', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Cancel orchestrator
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+async function cancelOrchestrator(orchestratorId) {
+  if (!confirm('Are you sure you want to cancel this orchestrator? This will stop all running workers.')) {
+    return;
+  }
+
+  try {
+    const response = await apiRequest(`/api/orchestrator/${orchestratorId}/cancel`, {
+      method: 'POST'
+    });
+
+    if (response.success) {
+      showInjectionNotification('Orchestrator cancelled', 'info');
+      stopOrchestratorPolling();
+      refreshOrchestratorDashboard();
+    } else {
+      showInjectionNotification(response.message || 'Failed to cancel', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Retry a failed worker
+ * @param {string} taskId - Task ID to retry
+ */
+async function retryWorker(taskId) {
+  if (!currentOrchestrator) return;
+
+  try {
+    const response = await apiRequest(`/api/orchestrator/${currentOrchestrator.id}/workers/${taskId}/retry`, {
+      method: 'POST'
+    });
+
+    if (response.success) {
+      showInjectionNotification(`Worker ${taskId} restarted`, 'success');
+      refreshOrchestratorDashboard();
+    } else {
+      showInjectionNotification(response.message || 'Failed to retry worker', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Cancel a running worker
+ * @param {string} taskId - Task ID to cancel
+ */
+async function cancelWorker(taskId) {
+  if (!currentOrchestrator) return;
+
+  try {
+    const response = await apiRequest(`/api/orchestrator/${currentOrchestrator.id}/workers/${taskId}/cancel`, {
+      method: 'POST'
+    });
+
+    if (response.success) {
+      showInjectionNotification(`Worker ${taskId} cancelled`, 'info');
+      refreshOrchestratorDashboard();
+    } else {
+      showInjectionNotification(response.message || 'Failed to cancel worker', 'error');
+    }
+  } catch (error) {
+    showInjectionNotification(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Pause all workers
+ * @param {string} orchestratorId - Orchestrator ID
+ */
+async function pauseAllWorkers(orchestratorId) {
+  await pauseOrchestrator(orchestratorId);
+}
+
+/**
+ * Refresh orchestrator dashboard
+ */
+async function refreshOrchestratorDashboard() {
+  if (!currentOrchestrator) return;
+
+  try {
+    const orch = await loadOrchestratorDetails(currentOrchestrator.id);
+
+    // Also fetch messages if mainSessionId exists
+    let messages = null;
+    if (orch.mainSessionId) {
+      try {
+        const messagesData = await apiRequest(`/api/session/${orch.mainSessionId}/messages?offset=0&limit=100`);
+        messages = messagesData.messages || [];
+      } catch (msgError) {
+        console.warn('[Orchestrator] Could not fetch messages:', msgError.message);
+      }
+    }
+
+    updateOrchestratorDashboard(orch, messages);
+  } catch (error) {
+    showInjectionNotification(`Error refreshing: ${error.message}`, 'error');
+  }
+}
+
+// Expose orchestrator functions globally
+window.switchOrchestratorTab = switchOrchestratorTab;
+window.toggleWorkerDetail = toggleWorkerDetail;
+window.confirmOrchestratorTasks = confirmOrchestratorTasks;
+window.pauseOrchestrator = pauseOrchestrator;
+window.resumeOrchestrator = resumeOrchestrator;
+window.cancelOrchestrator = cancelOrchestrator;
+window.retryWorker = retryWorker;
+window.cancelWorker = cancelWorker;
+window.pauseAllWorkers = pauseAllWorkers;
+window.refreshOrchestratorDashboard = refreshOrchestratorDashboard;
