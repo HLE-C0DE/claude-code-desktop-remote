@@ -480,11 +480,11 @@ catch {
     if ($cloudflaredProcess) {
         Stop-Process -Id $cloudflaredProcess.Id -Force -ErrorAction SilentlyContinue
     }
-    if ($cloudflaredLogFile -and (Test-Path $cloudflaredLogFile)) {
-        Remove-Item $cloudflaredLogFile -Force -ErrorAction SilentlyContinue
+    if ($cloudflaredLogFile -and (Test-Path -Path $cloudflaredLogFile)) {
+        Remove-Item -Path $cloudflaredLogFile -Force -ErrorAction SilentlyContinue
     }
-    if ($cloudflaredErrFile -and (Test-Path $cloudflaredErrFile)) {
-        Remove-Item $cloudflaredErrFile -Force -ErrorAction SilentlyContinue
+    if ($cloudflaredErrFile -and (Test-Path -Path $cloudflaredErrFile)) {
+        Remove-Item -Path $cloudflaredErrFile -Force -ErrorAction SilentlyContinue
     }
 
     Read-Host "Appuyez sur Entree pour quitter"
@@ -570,11 +570,11 @@ function Cleanup {
     }
 
     # Supprimer les fichiers de log
-    if ($cloudflaredLogFile -and (Test-Path $cloudflaredLogFile)) {
-        Remove-Item $cloudflaredLogFile -Force -ErrorAction SilentlyContinue
+    if ($cloudflaredLogFile -and (Test-Path -Path $cloudflaredLogFile)) {
+        Remove-Item -Path $cloudflaredLogFile -Force -ErrorAction SilentlyContinue
     }
-    if ($cloudflaredErrFile -and (Test-Path $cloudflaredErrFile)) {
-        Remove-Item $cloudflaredErrFile -Force -ErrorAction SilentlyContinue
+    if ($cloudflaredErrFile -and (Test-Path -Path $cloudflaredErrFile)) {
+        Remove-Item -Path $cloudflaredErrFile -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host ""
